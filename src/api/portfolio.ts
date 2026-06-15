@@ -10,7 +10,7 @@ import { ApiResponse, DashboardData } from '../lib/types';
  */
 export async function handlePortfolioRequest(c: Context): Promise<Response> {
   try {
-    const userId = parseInt(c.req.param('userId'));
+    const userId = parseInt(c.req.param('userId') ?? '0');
     if (!userId || userId <= 0) {
       return c.json({
         success: false,
@@ -84,7 +84,7 @@ export async function handlePortfolioRequest(c: Context): Promise<Response> {
  */
 export async function handlePortfolioSummaryRequest(c: Context): Promise<Response> {
   try {
-    const userId = parseInt(c.req.param('userId'));
+    const userId = parseInt(c.req.param('userId') ?? '0');
     if (!userId || userId <= 0) {
       return c.json({
         success: false,
@@ -126,7 +126,7 @@ export async function handlePortfolioSummaryRequest(c: Context): Promise<Respons
  */
 export async function handleUpdatePortfolioRequest(c: Context): Promise<Response> {
   try {
-    const userId = parseInt(c.req.param('userId'));
+    const userId = parseInt(c.req.param('userId') ?? '0');
     if (!userId || userId <= 0) {
       return c.json({
         success: false,

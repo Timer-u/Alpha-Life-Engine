@@ -10,7 +10,7 @@ import { TransactionForm, ApiResponse } from '../lib/types';
  */
 export async function handleTransactionsRequest(c: Context): Promise<Response> {
   try {
-    const userId = parseInt(c.req.param('userId'));
+    const userId = parseInt(c.req.param('userId') ?? '0');
     if (!userId || userId <= 0) {
       return c.json({
         success: false,
@@ -46,7 +46,7 @@ export async function handleTransactionsRequest(c: Context): Promise<Response> {
  */
 export async function handleCreateTransactionRequest(c: Context): Promise<Response> {
   try {
-    const userId = parseInt(c.req.param('userId'));
+    const userId = parseInt(c.req.param('userId') ?? '0');
     if (!userId || userId <= 0) {
       return c.json({
         success: false,
