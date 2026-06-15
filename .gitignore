@@ -1,0 +1,81 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory
+coverage
+*.lcov
+
+# Build artifacts
+dist/
+build/
+
+# Environment files
+.env
+.env.local
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+database/
+!.gitkeep
+
+# Cloudflare specific
+.wrangler/
+*.wrangler
+
+# Python environment
+venv/
+env/
+.venv/
+__pycache__/
+*.py[cod]
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Alpha-Life Engine specific
+# Personal trading data
+trading_data/
+portfolio_data/
+transactions_*.csv
+positions_*.csv
+
+# API keys and secrets
+config/auth/
+config/keys/
+*.api_key
+*.secret
+cf_credentials.json
+cloudflare.json
+
+# Strategy evolution outputs
+evolution_results/
+parameter_sets/
+backtest_results/
+monte_carlo_results/
+mpt_results/
+
+# User-specific files
+user_profiles/
+user_data/
+personal_config/
+
+# Hardware configurations
+gpu_config/
+rtx_config/
