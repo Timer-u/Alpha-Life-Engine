@@ -39,7 +39,7 @@ export async function handlePortfolioRequest(c: Context): Promise<Response> {
     const triggerStatus = {
       current_balance: portfolio.total_balance,
       trigger_line: 1667,
-      status: portfolio.total_balance < 1667 ? 'accumulating' : 'triggerable',
+      status: (portfolio.total_balance < 1667 ? 'accumulating' : 'triggerable') as 'accumulating' | 'triggerable',
       last_decision: undefined, // Would be populated from trigger log
       last_decision_time: undefined,
     };

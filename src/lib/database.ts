@@ -171,14 +171,15 @@ export class Database {
   }
 
   async recordManualTransaction(userId: number, form: TransactionForm): Promise<Transaction> {
-    const commission = this.calculateCommission(form.amount);
-    
+    const amount = form.amount !== undefined ? form.amount : form.shares * form.price;
+    const commission = this.calculateCommission(amount);
+
     const transaction = {
       user_id: userId,
       symbol: form.symbol,
       shares: form.shares,
       price: form.price,
-      amount: form.amount,
+      amount,
       commission,
       transaction_type: form.transaction_type,
       trigger_signal: form.trigger_signal,

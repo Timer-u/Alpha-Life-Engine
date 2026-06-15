@@ -27,8 +27,9 @@ build/
 *.db
 *.sqlite
 *.sqlite3
-database/
-!.gitkeep
+database/*.db
+database/*.sqlite
+database/*.sqlite3
 
 # Cloudflare specific
 .wrangler/

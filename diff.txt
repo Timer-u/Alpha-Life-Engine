@@ -1,0 +1,277 @@
+﻿diff --git a/.gitignore b/.gitignore
+index b69ee71..847490a 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -27,8 +27,9 @@ build/
+ *.db
+ *.sqlite
+ *.sqlite3
+-database/
+-!.gitkeep
++database/*.db
++database/*.sqlite
++database/*.sqlite3
+ 
+ # Cloudflare specific
+ .wrangler/
+diff --git a/package.json b/package.json
+index 529da73..fdef6f2 100644
+--- a/package.json
++++ b/package.json
+@@ -10,6 +10,7 @@
+     "database:migrate": "tsx database/migrate.ts",
+     "database:seed": "tsx database/seed.ts",
+     "baoStock:setup": "tsx scripts/bao-stock-setup.ts",
++    "baoStock:update": "tsx scripts/bao-stock-setup.ts",
+     "deploy": "wrangler pages deploy",
+     "types": "tsc --noEmit",
+     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+diff --git a/scripts/bao-stock-setup.ts b/scripts/bao-stock-setup.ts
+index 7c50410..6633ce9 100644
+--- a/scripts/bao-stock-setup.ts
++++ b/scripts/bao-stock-setup.ts
+@@ -1,28 +1,230 @@
+ #!/usr/bin/env node
+ 
+-import { readFileSync, writeFileSync } from 'fs';
+-import { execSync } from 'child_process';
++import { writeFileSync, mkdirSync } from 'fs';
++import { resolve } from 'path';
++import { exec } from 'child_process';
++import { promisify } from 'util';
++
++const execAsync = promisify(exec);
++
++interface BaoStockConfig {
++  codes: Array<{ code: string; name: string }>;
++  startDate: string;
++  endDate: string;
++  outputDir: string;
++}
++
++/**
++ * BaoStock 鍘嗗彶鏁版嵁涓嬭浇鍣?+ * 
++ * 璇存槑锛?+ * 1. 闇€瑕佸厛瀹夎 baostock Python 鍖? pip install baostock
++ * 2. 棣栨杩愯浼氫笅杞芥墍鏈夊巻鍙叉暟鎹紙1990-鑷充粖锛夛紝鍙兘闇€瑕?10-30 鍒嗛挓
++ * 3. 涔嬪悗閫氳繃 GitHub Actions 姣忓ぉ澧為噺鏇存柊
++ */
++export async function baoStockSetup() {
++  console.log('=' .repeat(50));
++  console.log('BaoStock 鍘嗗彶鏁版嵁鍒濆鍖?);
++  console.log('=' .repeat(50));
++  console.log('');
++
++  const config: BaoStockConfig = {
++    codes: [
++      { code: 'sh.511360', name: '娴峰瘜閫氱煭铻? },
++      { code: 'sh.511880', name: '閾跺崕鏃ュ埄' },
++    ],
++    startDate: '1990-01-01',
++    endDate: new Date().toISOString().split('T')[0],
++    outputDir: resolve(process.cwd(), 'data/market_data'),
++  };
+ 
+-export function baoStockSetup() {
+-  console.log('Starting BaoStock historical data setup...');
+-  
+   try {
+-    console.log('馃搳 Downloading BaoStock historical data (1990-present)...');
+-    
+-    // Create data directory if it doesn't exist
+-    execSync('mkdir -p data/market');
+-    
+-    console.log('鉁?BaoStock setup completed');
+-    console.log('Historical data downloaded and indexed');
+-    console.log('Data stored in: data/market/');
+-    
++    // 鍒涘缓杈撳嚭鐩綍
++    mkdirSync(config.outputDir, { recursive: true });
++    console.log(`鉁?鏁版嵁鐩綍宸插垱寤? ${config.outputDir}`);
++    console.log('');
++
++    // 鍒涘缓 Python 涓嬭浇鑴氭湰
++    const pythonScript = createPythonScript(config);
++    const scriptPath = resolve(config.outputDir, 'download.py');
++    writeFileSync(scriptPath, pythonScript);
++    console.log(`鉁?Python 鑴氭湰宸插垱寤? ${scriptPath}`);
++    console.log('');
++
++    // 鎵ц Python 鑴氭湰
++    console.log('馃摜 寮€濮嬩笅杞藉巻鍙叉暟鎹?..');
++    console.log(`   鏃堕棿鑼冨洿: ${config.startDate} 鍒?${config.endDate}`);
++    console.log(`   ETF 浠ｇ爜: ${config.codes.map(c => c.code).join(', ')}`);
++    console.log('');
++    console.log('馃挕 鎻愮ず锛氶娆′笅杞藉彲鑳介渶瑕?10-30 鍒嗛挓锛岃鑰愬績绛夊緟...');
++    console.log('');
++
++    try {
++      const { stdout, stderr } = await execAsync(`python "${scriptPath}"`);
++      if (stdout) console.log(stdout);
++      if (stderr) console.error(stderr);
++    } catch (error: any) {
++      // Python 鍙兘涓嶅湪 PATH 涓紝灏濊瘯 python3
++      try {
++        const { stdout, stderr } = await execAsync(`python3 "${scriptPath}"`);
++        if (stdout) console.log(stdout);
++        if (stderr) console.error(stderr);
++      } catch (error2) {
++        console.error('鉂?Python 鎵ц澶辫触');
++        console.error('   璇风‘淇濆凡瀹夎 Python 3.8+');
++        console.error('   骞跺畨瑁呬簡 baostock 鍖? pip install baostock pandas');
++        throw error2;
++      }
++    }
++
++    console.log('');
++    console.log('=' .repeat(50));
++    console.log('鉁?BaoStock 鍒濆鍖栧畬鎴?);
++    console.log('=' .repeat(50));
++    console.log('');
++    console.log('涓嬩竴姝ユ搷浣滐細');
++    console.log('1. 楠岃瘉 CSV 鏂囦欢宸茬敓鎴愬湪 data/market_data/ 鐩綍');
++    console.log('2. 杩愯 npm run database:migrate 灏嗘暟鎹鍏?D1');
++    console.log('3. 閰嶇疆 GitHub Actions 鐢ㄤ簬鏃ュ父鑷姩鏇存柊');
++    console.log('');
++
+   } catch (error) {
+-    console.error('鉂?BaoStock setup failed:', error);
++    console.error('鉂?BaoStock 鍒濆鍖栧け璐?', error);
+     process.exit(1);
+   }
+ }
+ 
++/**
++ * 鍒涘缓 Python 涓嬭浇鑴氭湰鍐呭
++ */
++function createPythonScript(config: BaoStockConfig): string {
++  return `#!/usr/bin/env python3
++# -*- coding: utf-8 -*-
++"""
++BaoStock 鍘嗗彶鏁版嵁涓嬭浇鑴氭湰
++鑷姩涓嬭浇鎸囧畾 ETF 鐨勫巻鍙蹭环鏍兼暟鎹?+"""
++
++import baostock as bs
++import pandas as pd
++import sys
++import os
++from datetime import datetime
++
++class BaoStockDownloader:
++    def __init__(self, output_dir: str):
++        self.output_dir = output_dir
++        self.codes = [
++            ('sh.511360', '娴峰瘜閫氱煭铻?),
++            ('sh.511880', '閾跺崕鏃ュ埄'),
++        ]
++        self.start_date = '1990-01-01'
++        self.end_date = datetime.now().strftime('%Y-%m-%d')
++    
++    def login(self):
++        """鐧诲綍 BaoStock"""
++        try:
++            lg = bs.login()
++            if lg.error_code == '0':
++                print(f"鉁?BaoStock 鐧诲綍鎴愬姛")
++                return True
++            else:
++                print(f"鉂?鐧诲綍澶辫触: {lg.msg}")
++                return False
++        except Exception as e:
++            print(f"鉂?鐧诲綍寮傚父: {e}")
++            return False
++    
++    def download_k_data(self, code: str, name: str):
++        """涓嬭浇 K 绾挎暟鎹?""
++        print(f"\\n馃摜 寮€濮嬩笅杞?{name} ({code})")
++        print(f"   鏃堕棿鑼冨洿: {self.start_date} 鍒?{self.end_date}")
++        
++        try:
++            rs = bs.query_history_k_data_plus(
++                code,
++                'date,code,open,high,low,close,volume,amount',
++                start_date=self.start_date,
++                end_date=self.end_date,
++                frequency='d'
++            )
++            
++            if rs.error_code != '0':
++                print(f"鉂?鏌ヨ澶辫触: {rs.msg}")
++                return None
++            
++            data = []
++            count = 0
++            
++            while rs.error_code == '0':
++                row = rs.next()
++                if row is None:
++                    break
++                
++                try:
++                    record = {
++                        'date': row[0],
++                        'code': row[1],
++                        'open': float(row[2]) if row[2] else None,
++                        'high': float(row[3]) if row[3] else None,
++                        'low': float(row[4]) if row[4] else None,
++                        'close': float(row[5]) if row[5] else None,
++                        'volume': int(row[6]) if row[6] else 0,
++                        'amount': float(row[7]) if row[7] else 0,
++                    }
++                    data.append(record)
++                    count += 1
++                    
++                    if count % 1000 == 0:
++                        print(f"   宸蹭笅杞? {count} 鏉?({row[0]})")
++                
++                except (ValueError, IndexError) as e:
++                    print(f"   鈿狅笍  璺宠繃鏃犳晥鏁版嵁: {e}")
++                    continue
++            
++            # 淇濆瓨涓?CSV
++            if data:
++                df = pd.DataFrame(data)
++                filename = f"{code.replace('.', '_')}.csv"
++                filepath = os.path.join(self.output_dir, filename)
++                df.to_csv(filepath, index=False)
++                print(f"鉁?宸蹭繚瀛?{count} 鏉¤褰曞埌: {filename}")
++                return data
++            else:
++                print(f"鉂?鏈幏鍙栧埌鏁版嵁")
++                return None
++                
++        except Exception as e:
++            print(f"鉂?涓嬭浇寮傚父: {e}")
++            return None
++    
++    def run(self):
++        """鎵ц涓嬭浇"""
++        if not self.login():
++            return False
++        
++        try:
++            total_records = 0
++            for code, name in self.codes:
++                data = self.download_k_data(code, name)
++                if data:
++                    total_records += len(data)
++            
++            print(f"\\n鉁?涓嬭浇瀹屾垚: 鍏?{{len(self.codes)}} 涓?ETF锛寋total_records} 鏉¤褰?)
++            return True
++            
++        finally:
++            bs.logout()
++            print("鉁?BaoStock 鐧诲嚭")
++
++if __name__ == '__main__':
++    downloader = BaoStockDownloader('${config.outputDir}')
++    success = downloader.run()
++    sys.exit(0 if success else 1)
++`;
++}
++
+ // If this file is run directly, execute the setup
+-if (import.meta.url === `file://${process.argv[1]}`) {
++if (import.meta.url === `file://${ process.argv[1]}`) {
+   baoStockSetup();
+ }
+

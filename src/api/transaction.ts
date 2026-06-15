@@ -67,9 +67,11 @@ export async function handleCreateTransactionRequest(c: Context): Promise<Respon
     }
     
     // Validate required fields
-    const requiredFields = ['symbol', 'shares', 'price', 'transaction_type', 'layer'];
+    const requiredFields = ['symbol', 'shares', 'price', 'transaction_type', 'layer'] as const;
     for (const field of requiredFields) {
-      if (!transactionForm[field]) {
+      const key = field as keyof TransactionForm;
+      const value = transactionForm[key];
+      if (value === undefined || value === null) {
         return c.json({
           success: false,
           error: 'Missing required field',

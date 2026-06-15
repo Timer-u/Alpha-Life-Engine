@@ -202,6 +202,7 @@ export interface TransactionForm {
   symbol: string;
   shares: number;
   price: number;
+  amount?: number;
   transaction_type: 'buy' | 'sell';
   trigger_signal?: string;
   layer: 'safe' | 'ambition';
