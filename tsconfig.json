@@ -13,14 +13,14 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": [
+    "include": [
     "src",
     "scripts",
     "database",
     "functions",
     "types",
     "vite.config.ts",
-    "\.github/workflows/*.yml"
+    ".github/workflows/**/*.yml"
   ],
   "exclude": [
     "node_modules",
