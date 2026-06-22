@@ -1,28 +1,21 @@
 name = "alpha-life-engine"
-main = "src/index.ts"
-compatibility_date = "2024-01-01"
-
-# Wrangler 版本
+main = "_worker.js"
+compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-# 开发环境配置
-[env.development]
-name = "alpha-life-engine-dev"
-routes = []
-vars = { ENVIRONMENT = "development", LOG_LEVEL = "debug" }
+vars = { ENVIRONMENT = "development", LOG_LEVEL = "debug", SESSION_DAYS = "7" }
 
-[[env.development.d1_databases]]
+[[d1_databases]]
 binding = "DB"
 database_name = "alpha-life-dev"
 database_id = "a491d7ba-045d-4303-a10b-ae25591e8164"
 
-# 生产环境配置
 [env.production]
 name = "alpha-life-engine"
 routes = [
   { pattern = "alpha-life.yourdomain.com/*", zone_name = "yourdomain.com" }
 ]
-vars = { ENVIRONMENT = "production", LOG_LEVEL = "info" }
+vars = { ENVIRONMENT = "production", LOG_LEVEL = "info", SESSION_DAYS = "7" }
 
 [[env.production.d1_databases]]
 binding = "DB"

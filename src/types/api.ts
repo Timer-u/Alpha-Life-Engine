@@ -1,154 +1,211 @@
-// API Type Contract - Alpha-Life Engine
-// Shared TypeScript interfaces for frontend/backend communication
+// ============================================================
+// Alpha-Life Engine - Shared TypeScript Types
+// ============================================================
 
-export interface ApiResponse<T = any> {
-  success: boolean;
-  data: T;
-  error?: string;
-  timestamp: string;
+export type TriggerDecision = 'DEFER' | 'SKIP' | 'EXECUTE';
+export type SignalType = 'BSM' | 'DOUBLE' | 'NORMAL' | 'SKIP';
+export type LayerType = 'safe' | 'ambition';
+export type TransactionType = 'buy' | 'sell';
+
+export interface TriggerInput {
+  user_id: number;
+  current_balance: number;
+  signal_value: number;
+  signal_type: SignalType;
 }
 
-export interface PortfolioBalance {
-  totalBalance: number;
-  safeLayerBalance: number;
-  ambitionLayerBalance: number;
-  availableBalance: number;
-  lockedBalance: number;
+export interface TriggerResponse {
+  decision: TriggerDecision;
+  executed_amount?: number;
+  commission: number;
+  layer_allocation: {
+    safe_amount: number;
+    ambition_amount: number;
+  };
+  message: string;
+  next_safe_etf: '511360' | '511880';
+  market_data: {
+    current_price_511360: number;
+    current_price_511880: number;
+  };
+}
+
+export const TRIGGER_CONSTANTS = {
+  LINE: 1667 as const,
+  COMMISSION_RATE: 0.0003 as const,
+  COMMISSION_MIN: 5 as const,
+} as const;
+
+export const ETF_CONSTANTS = {
+  SAFE_PRIMARY: '511360',
+  SAFE_PRIMARY_NAME: '海富通短融ETF',
+  SAFE_BACKUP: '511880',
+  SAFE_BACKUP_NAME: '银华日利',
+} as const;
+
+// Database Entity Types
+export interface User {
+  id: number;
+  email: string;
+  name: string | null;
+  avatar_url: string | null;
+  phone: string | null;
+  preferences: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Portfolio {
+  id: number;
+  user_id: number;
+  total_balance: number;
+  safe_layer_balance: number;
+  ambition_layer_balance: number;
+  last_balance_update: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Position {
+  id: number;
+  user_id: number;
+  symbol: string;
+  name: string;
+  shares: number;
+  avg_price: number;
+  current_price: number;
+  market_value: number;
+  last_price_update: string;
+  layer: LayerType;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Transaction {
-  id: string;
-  type: 'BUY' | 'SELL';
+  id: number;
+  user_id: number;
   symbol: string;
   shares: number;
   price: number;
   amount: number;
   commission: number;
-  timestamp: string;
-  layer: 'SAFE' | 'AMBITION';
-  status: 'PENDING' | 'COMPLETED' | 'FAILED';
+  transaction_type: TransactionType;
+  trigger_signal: string | null;
+  layer: LayerType;
+  created_at: string;
+  notes: string | null;
 }
 
-export interface TriggerSignal {
-  type: 'SKIP' | 'DEFER' | 'EXECUTE' | 'DOUBLE' | 'NORMAL';
-  strength: number;
-  reason: string;
-  timestamp: string;
-}
-
-export interface TriggerDecision {
-  action: 'BUY' | 'SKIP' | 'DEFER';
-  amount: number;
-  signal: TriggerSignal;
-  timestamp: string;
-  nextBalance: PortfolioBalance;
-}
-
-export interface SafeLayerConfig {
-  primaryETF: '511360'; // 海富通短融 ETF
-  backupETF: '511880'; // 银华日利
-  allocationRatio: number;
-  expectedReturn: number; // 年化收益率
+export interface TransactionForm {
+  symbol: string;
+  shares: number;
+  price: number;
+  amount?: number;
+  commission?: number;
+  transaction_type: TransactionType;
+  trigger_signal?: string;
+  layer: LayerType;
+  notes?: string;
 }
 
 export interface MarketData {
+  id: number;
   symbol: string;
-  price: number;
-  change: number;
-  changePercent: number;
-  volume: number;
+  date: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+  created_at: string;
+}
+
+export interface StrategyReport {
+  id: number;
+  user_id: number;
+  report_data: string;
+  pbo_score: number | null;
+  dsr_ranking: number | null;
+  parameter_count: number;
+  evolution_timestamp: string;
+  next_scheduled_evolution: string | null;
+  created_at: string;
+}
+
+export interface SystemConfig {
+  trigger_line: number;
+  commission_rate: number;
+  commission_min: number;
+  safe_layer_primary: string;
+  safe_layer_backup: string;
+  safe_layer_name_primary: string;
+  safe_layer_name_backup: string;
+  ambition_layer_name: string;
+}
+
+// API Response Types
+export interface ApiResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
   timestamp: string;
 }
 
-export interface UserConfig {
-  id: string;
-  email: string;
-  triggerAmount: number; // 1667
-  commissionRate: number; // 0.03%
-  minCommission: number; // 5
-  safeLayerConfig: SafeLayerConfig;
-  timezone: string;
-  notifications: {
-    email: boolean;
-    strategyEvolution: boolean;
+export interface DashboardData {
+  portfolio: Portfolio | null;
+  positions: Position[];
+  recent_transactions: Transaction[];
+  trigger_status: {
+    current_balance: number;
+    trigger_line: number;
+    status: 'accumulating' | 'triggerable';
+    last_decision?: string;
+    last_decision_time?: string;
+  };
+  strategy_evolution: {
+    last_evolution: string | null;
+    days_since_evolution: number;
+    pbo_score: number | null;
+    status_color: 'green' | 'yellow' | 'red';
   };
 }
 
-export interface StrategyEvolutionReport {
-  id: string;
-  timestamp: string;
-  pboScore: number; // Parameter Bootstrap Overfitting
-  dsrScore: number; // Dynamic Sharpe Ratio
-  parameterCount: number;
-  parameterStability: number;
-  mptFrontier: Array<{
-    risk: number;
-    return: number;
-    sharpe: number;
-  }>;
-  monteCarloResults: {
-    var95: number;
-    var99: number;
-    expectedReturn: number;
-    volatility: number;
+export interface AuthSession {
+  token: string;
+  user: {
+    id: number;
+    email: string;
+    name: string | null;
   };
-  recommendations: string[];
-  nextEvolution: string;
+  expires_at: string;
 }
 
-export interface EvolutionTrigger {
-  type: 'TIME_BASED' | 'MARKET_CONDITION' | 'MANUAL';
-  priority: 'HIGH' | 'MEDIUM' | 'LOW';
-  timestamp: string;
-  condition: string;
+export interface MarketPriceData {
+  [symbol: string]: number;
 }
 
-export interface BaoStockConfig {
-  apiKey?: string;
-  dataPath: string;
-  symbols: string[];
-  updateFrequency: 'DAILY' | 'WEEKLY' | 'MONTHLY';
+// Frontend UI Types
+export interface EvolutionStatus {
+  lastEvolution: string | null;
+  daysSince: number;
+  pboScore: number | null;
+  status: 'green' | 'yellow' | 'red';
 }
 
-export interface CloudflareConfig {
-  access: {
-    domain: string;
-    sessionDays: number;
-    emailWhitelist: string[];
-  };
-  pages: {
-    domain: string;
-  };
-  resend: {
-    apiKey: string;
-    fromEmail: string;
-  };
+export interface TriggerProgress {
+  currentBalance: number;
+  triggerLine: number;
+  percentage: number;
+  status: 'accumulating' | 'triggerable';
 }
 
-export interface SystemHealth {
-  database: {
-    status: 'healthy' | 'degraded' | 'unhealthy';
-    lastUpdate: string;
-    latency: number;
-  };
-  marketData: {
-    status: 'fresh' | 'stale' | 'error';
-    lastUpdate: string;
-    symbolsCount: number;
-  };
-  strategyEngine: {
-    status: 'operational' | 'limited' | 'down';
-    lastRun: string;
-    queueSize: number;
-  };
-}
-
-export interface UserSession {
-  id: string;
-  userId: string;
-  email: string;
-  expiresAt: string;
-  lastActivity: string;
-  ip: string;
-  userAgent: string;
+// Type guard for API responses
+export function isApiResponse<T>(obj: unknown): obj is ApiResponse<T> {
+  return (
+    obj !== null &&
+    typeof obj === 'object' &&
+    'success' in obj &&
+    typeof (obj as any).success === 'boolean'
+  );
 }

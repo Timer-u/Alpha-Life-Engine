@@ -5,12 +5,20 @@
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email TEXT UNIQUE NOT NULL,
-  name TEXT NOT NULL,
+  name TEXT,
   avatar_url TEXT,
   phone TEXT,
   preferences JSON,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 邮箱白名单表（用于 OTP 认证准入控制）
+CREATE TABLE IF NOT EXISTS email_whitelist (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT UNIQUE NOT NULL,
+  notes TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Portfolio summary table
@@ -88,7 +96,7 @@ CREATE TABLE IF NOT EXISTS trigger_log (
 CREATE TABLE IF NOT EXISTS strategy_reports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  report_data TEXT NOT NULL, -- JSON stored as text
+  report_data TEXT NOT NULL,
   pbo_score DECIMAL(10,4),
   dsr_ranking DECIMAL(10,4),
   parameter_count INTEGER DEFAULT 0,
@@ -97,7 +105,7 @@ CREATE TABLE IF NOT EXISTS strategy_reports (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 对账记录表（用于月度对账）
+-- 对账记录表
 CREATE TABLE IF NOT EXISTS reconciliations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -124,6 +132,26 @@ CREATE TABLE IF NOT EXISTS config (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Sessions table for user sessions
+CREATE TABLE IF NOT EXISTS sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT UNIQUE NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  expires_at DATETIME NOT NULL,
+  last_active DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- OTP codes table
+CREATE TABLE IF NOT EXISTS otps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT NOT NULL,
+  code TEXT NOT NULL,
+  used INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  expires_at DATETIME NOT NULL
+);
+
 -- Insert initial configuration values
 INSERT OR IGNORE INTO config (key, value, description) VALUES
 ('trigger_line', '1667', '1667 yuan trigger line'),
@@ -143,35 +171,6 @@ CREATE INDEX IF NOT EXISTS idx_transactions_user_created ON transactions(user_id
 CREATE INDEX IF NOT EXISTS idx_market_data_symbol_date ON market_data(symbol, date);
 CREATE INDEX IF NOT EXISTS idx_trigger_log_user_created ON trigger_log(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_strategy_reports_user_id ON strategy_reports(user_id);
-
--- Create view for portfolio summary
-CREATE VIEW IF NOT EXISTS portfolio_summary AS
-SELECT 
-  p.user_id,
-  p.total_balance,
-  p.safe_layer_balance,
-  p.ambition_layer_balance,
-  COUNT(CASE WHEN p.layer = 'safe' THEN 1 END) as safe_positions_count,
-  COUNT(CASE WHEN p.layer = 'ambition' THEN 1 END) as ambition_positions_count,
-  p.last_balance_update,
-  p.created_at,
-  p.updated_at
-FROM portfolio p;
-
--- Create view for recent transactions
-CREATE VIEW IF NOT EXISTS recent_transactions AS
-SELECT 
-  t.id,
-  t.user_id,
-  t.symbol,
-  t.shares,
-  t.price,
-  t.amount,
-  t.commission,
-  t.transaction_type,
-  t.trigger_signal,
-  t.layer,
-  t.created_at
-FROM transactions t
-ORDER BY t.created_at DESC
-LIMIT 100;
+CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+CREATE INDEX IF NOT EXISTS idx_otps_email ON otps(email);
+CREATE INDEX IF NOT EXISTS idx_email_whitelist_email ON email_whitelist(email);

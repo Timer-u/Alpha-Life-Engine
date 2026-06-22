@@ -1,42 +1,34 @@
 #!/usr/bin/env node
 /**
  * 数据库种子脚本
- * 为测试环境创建初始数据
  */
 
 import { execSync } from 'child_process';
 
-export const SEED_DATA = {
-  users: [
-    {
-      email: 'test@example.com',
-      name: '测试用户',
-    },
-  ],
-  portfolio: [
-    {
-      user_id: 1,
-      total_balance: 1200.5,
-      safe_layer_sh511360: 10000,
-      safe_layer_sh511880: 0,
-      ambition_layer_value: 0,
-    },
-  ],
-};
-
 export async function seedDatabase() {
-  console.log('=' .repeat(50));
+  console.log('='.repeat(50));
   console.log('开始数据库种子数据导入');
-  console.log('=' .repeat(50));
-  console.log('');
-  
+  console.log('='.repeat(50));
+
   try {
     const env = process.env.CLOUDFLARE_ENV || 'development';
     const dbName = env === 'production' ? 'alpha-life-prod' : 'alpha-life-dev';
-    
+
     console.log(`目标数据库: ${dbName} (${env})`);
+
+    const seedSql = `
+      INSERT OR IGNORE INTO email_whitelist (email, notes) VALUES
+      ('test@example.com', '测试用户'),
+      ('admin@alpha-life.yourdomain.com', '管理员');
+    `;
+
+    const cmd = `wrangler d1 execute ${dbName} --command="${seedSql.replace(/\n/g, ' ')}" ${env === 'development' ? '--local' : '--remote'}`;
+
+    execSync(cmd, { stdio: 'inherit', cwd: process.cwd() });
+
+    console.log('');
     console.log('✅ 种子数据导入完成');
-    
+
   } catch (error) {
     console.error('❌ 种子数据导入失败:', error);
     process.exit(1);
