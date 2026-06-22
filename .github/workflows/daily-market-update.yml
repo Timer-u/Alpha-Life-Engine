@@ -15,7 +15,6 @@ on:
           - production
           - development
 
-# 最小权限：只需读取仓库内容，不发 PR、不写回仓库
 permissions:
   contents: read
 
