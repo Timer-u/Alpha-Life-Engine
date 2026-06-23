@@ -35,7 +35,7 @@ function checkPythonDeps(): void {
 
 function createPythonScript(config: BaoStockConfig): string {
   const codesJson = JSON.stringify(config.codes.map(c => [c.code, c.name]));
-  const safeOutDir = JSON.stringify(config.outputDir); // escapes backslashes
+  const safeOutDir = JSON.stringify(config.outputDir);
   return `#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -80,13 +80,12 @@ class BaoStockDownloader:
                 frequency='d'
             )
             if rs.error_code != '0':
-                print(f"     [FAIL] {rs.msg}")
+                print(f"     [FAIL] {rs.error_msg}")
                 return None
             data = []
-            while True:
-                row = rs.next()
-                if row is None:
-                    break
+            # Correct BaoStock iteration: rs.next() returns bool, get_row_data() gets the row
+            while (rs.error_code == '0') & rs.next():
+                row = rs.get_row_data()
                 try:
                     data.append({
                         'date': row[0],
@@ -98,7 +97,8 @@ class BaoStockDownloader:
                         'volume': int(row[6]) if row[6] else 0,
                         'amount': float(row[7]) if row[7] else 0,
                     })
-                except (ValueError, IndexError):
+                except (ValueError, IndexError) as e:
+                    print(f"     [WARN] row parsing error: {e}")
                     continue
             if data:
                 df = pd.DataFrame(data)

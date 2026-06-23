@@ -1,15 +1,12 @@
 #!/usr/bin/env node
 /**
- * 每日市场数据更新脚本
- * 
- * 功能：
- * 1. 通过 BaoStock (Python) 获取最近5个交易日 ETF 行情
- * 2. 生成 INSERT OR IGNORE SQL
- * 3. 通过 wrangler d1 execute 写入 Cloudflare D1
- * 
- * 使用方式：
- *   npm run market:update             # 开发环境 (--local)
- *   npm run market:update -- --prod   # 生产环境 (--remote)
+ * Daily market data update script.
+ * Fetches latest ETF quotes via BaoStock (Python), generates INSERT SQL,
+ * and imports into Cloudflare D1 via wrangler.
+ *
+ * Usage:
+ *   npm run market:update             # development (--local)
+ *   npm run market:update -- --prod   # production (--remote)
  */
 
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
@@ -52,7 +49,7 @@ function checkPythonDeps(): void {
 
 function createPythonScript(outputDir: string): string {
   const codesJson = JSON.stringify(TRACKED_ETFS.map(c => [c.code, c.name]));
-  const safeOutDir = JSON.stringify(outputDir); // escapes backslashes for Windows
+  const safeOutDir = JSON.stringify(outputDir);
   return `
 import baostock as bs, pandas as pd, sys, os, json, time
 from datetime import datetime, timedelta
@@ -85,9 +82,12 @@ for code, name in codes:
         code, 'date,code,open,high,low,close,volume,amount',
         start_date=start, end_date=end, frequency='d'
     )
-    while True:
-        r = rs.next()
-        if r is None: break
+    if rs.error_code != '0':
+        print(f"Query error for {code}: {rs.error_msg}", file=sys.stderr)
+        continue
+    # Correct BaoStock iteration
+    while (rs.error_code == '0') & rs.next():
+        r = rs.get_row_data()
         try:
             results.append({
                 "symbol": r[1].replace("sh.", "").replace("sz.", ""),
