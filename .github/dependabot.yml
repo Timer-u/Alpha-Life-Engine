@@ -10,6 +10,9 @@ updates:
       - "dependencies"
     assignees:
       - "Timer-u"
+    ignore:
+      - dependency-name: "@types/node"
+        versions: [">=25.0.0"]
     groups:
       production-deps:
         patterns:
