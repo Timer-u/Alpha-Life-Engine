@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Daily market data update script.
- * Fetches latest ETF quotes via BaoStock (Python), generates INSERT SQL,
+ * Fetches latest quotes via BaoStock (Python), generates INSERT SQL,
  * and imports into Cloudflare D1 via wrangler.
  *
  * Usage:
@@ -19,9 +19,9 @@ const __filename = fileURLToPath(import.meta.url);
 const TRACKED_ETFS = [
   { code: 'sh.511360', name: 'Haitong Short-Term Bond ETF', layer: 'safe' },
   { code: 'sh.511880', name: 'Yinhua Rili Money Market', layer: 'safe' },
-  { code: 'sh.510300', name: 'CSI 300 ETF', layer: 'ambition' },
-  { code: 'sh.510500', name: 'CSI 500 ETF', layer: 'ambition' },
-  { code: 'sh.515080', name: 'China Merchants Dividend ETF', layer: 'ambition' },
+  { code: 'sh.000300', name: 'CSI 300 Index', layer: 'ambition' },
+  { code: 'sh.000905', name: 'CSI 500 Index', layer: 'ambition' },
+  { code: 'sh.000922', name: 'CSI Dividend Index', layer: 'ambition' },
 ];
 
 function parseArgs(): { env: 'development' | 'production'; dbName: string } {
@@ -85,7 +85,6 @@ for code, name in codes:
     if rs.error_code != '0':
         print(f"Query error for {code}: {rs.error_msg}", file=sys.stderr)
         continue
-    # Correct BaoStock iteration
     while (rs.error_code == '0') & rs.next():
         r = rs.get_row_data()
         try:

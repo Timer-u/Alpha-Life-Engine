@@ -15,9 +15,9 @@ interface BaoStockConfig {
 const TRACKED_ETFS = [
   { code: 'sh.511360', name: 'Haitong Short-Term Bond ETF', layer: 'safe' },
   { code: 'sh.511880', name: 'Yinhua Rili Money Market', layer: 'safe' },
-  { code: 'sh.510300', name: 'CSI 300 ETF', layer: 'ambition' },
-  { code: 'sh.510500', name: 'CSI 500 ETF', layer: 'ambition' },
-  { code: 'sh.515080', name: 'China Merchants Dividend ETF', layer: 'ambition' },
+  { code: 'sh.000300', name: 'CSI 300 Index', layer: 'ambition' },
+  { code: 'sh.000905', name: 'CSI 500 Index', layer: 'ambition' },
+  { code: 'sh.000922', name: 'CSI Dividend Index', layer: 'ambition' },
 ];
 
 function checkPythonDeps(): void {
@@ -83,7 +83,6 @@ class BaoStockDownloader:
                 print(f"     [FAIL] {rs.error_msg}")
                 return None
             data = []
-            # Correct BaoStock iteration: rs.next() returns bool, get_row_data() gets the row
             while (rs.error_code == '0') & rs.next():
                 row = rs.get_row_data()
                 try:
@@ -123,7 +122,7 @@ class BaoStockDownloader:
                 data = self.download_k_data(code, name)
                 if data:
                     total += len(data)
-            print(f"\\n[OK] All done: {len(self.codes)} ETFs, {total} records")
+            print(f"\\n[OK] All done: {len(self.codes)} ETFs/Indices, {total} records")
             return True
         finally:
             bs.logout()
@@ -176,7 +175,8 @@ function generateImportSql(config: BaoStockConfig): void {
         if (cols.length < 6) continue;
         const [date, code, open, high, low, close, volume, amount] = cols.map(c => c.trim());
         if (!date || !close) continue;
-        const symbol = etf.code.replace('sh.', '');
+        // Extract symbol: remove 'sh.' or 'sz.' prefix
+        const symbol = code.replace(/^(sh|sz)\./, '');
         batchRows.push(
           `('${symbol}', '${date}', ${open || 'NULL'}, ${high || 'NULL'}, ${low || 'NULL'}, ${close || 'NULL'}, ${volume || '0'})`
         );
@@ -224,7 +224,7 @@ export async function baoStockSetup() {
 
     console.log('Downloading historical data...');
     console.log(`   Range: ${config.startDate} to ${config.endDate}`);
-    console.log(`   ETFs: ${config.codes.map(c => `${c.code}(${c.name})`).join(', ')}`);
+    console.log(`   Assets: ${config.codes.map(c => `${c.code}(${c.name})`).join(', ')}`);
     console.log('');
     console.log('Note: First-time download may take 10-30 minutes');
     console.log('');
