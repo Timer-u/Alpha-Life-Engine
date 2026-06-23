@@ -10,7 +10,7 @@ const triggerRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 // ============================================================
 // 跟踪的 ETF 列表（与 BaoStock 脚本保持一致）
 // ============================================================
-const TRACKED_SYMBOLS = ['511360', '511880', '510300', '510500', '515080'];
+const TRACKED_SYMBOLS = ['511360', '511880', '000300', '000905', '000922'];
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -119,9 +119,9 @@ triggerRouter.get('/market-prices', async (c) => {
     const symbolNames: Record<string, string> = {
       '511360': '海富通短融ETF',
       '511880': '银华日利',
-      '510300': '沪深300ETF',
-      '510500': '中证500ETF',
-      '515080': '招商中证红利ETF',
+      '000300': '沪深300 (指数)',
+      '000905': '中证500 (指数)',
+      '000922': '中证红利 (指数)',
     };
 
     const data = {
@@ -143,3 +143,4 @@ triggerRouter.get('/market-prices', async (c) => {
 });
 
 export { triggerRouter, fetchLatestPrices };
+

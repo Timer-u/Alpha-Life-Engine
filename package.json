@@ -17,6 +17,8 @@
     "market:init": "npm run baoStock:setup && npm run database:migrate",
     "market:init:prod": "npm run baoStock:setup && npm run database:migrate:prod",
     "market:update": "tsx scripts/daily-market-update.ts",
+    "database:import-market": "wrangler d1 execute alpha-life-dev --file=./data/market_data/import_market_data.sql --local",
+    "database:import-market:prod": "wrangler d1 execute alpha-life-prod --file=./data/market_data/import_market_data.sql --remote",
     "market:update:prod": "tsx scripts/daily-market-update.ts --prod",
     "types": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
