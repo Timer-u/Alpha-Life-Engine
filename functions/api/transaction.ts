@@ -151,7 +151,7 @@ transactionRouter.post('/', async (c) => {
 transactionRouter.post('/calculate-commission', async (c) => {
   try {
     const body = await c.req.json();
-    const amount = typeof body === 'object' && body !== null ? parseFloat((body as any).amount) : NaN;
+    const bodyRecord = body as Record<string, unknown>; const amount = typeof body === 'object' && body !== null ? parseFloat(String(bodyRecord.amount ?? '')) : NaN;
     if (isNaN(amount) || amount <= 0) {
       return c.json({ success: false, error: 'Invalid input', message: '金额必须是正数' }, 400);
     }
@@ -168,3 +168,4 @@ transactionRouter.post('/calculate-commission', async (c) => {
 });
 
 export { transactionRouter };
+

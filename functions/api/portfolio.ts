@@ -132,7 +132,6 @@ portfolioRouter.get('/', async (c) => {
     }>();
     const rawPositions = positionsResult.results || [];
 
-    // 用 MarketData 中的最新价格覆盖 positions 的 current_price
     const positions = await enrichPositionsWithMarketPrices(db, rawPositions);
 
     const txResult = await db.prepare(
@@ -240,7 +239,8 @@ portfolioRouter.put('/', async (c) => {
     const updates: Partial<Record<AllowedField, number>> = {};
 
     for (const field of allowedFields) {
-      const value = (body as any)[field];
+      const bodyRecord = body as Record<string, unknown>;
+      const value = bodyRecord[field];
       if (value !== undefined && typeof value === 'number') {
         updates[field] = value;
       }
@@ -264,3 +264,4 @@ portfolioRouter.put('/', async (c) => {
 });
 
 export { portfolioRouter };
+

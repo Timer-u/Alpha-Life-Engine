@@ -37,7 +37,7 @@ app.use(
   })
 )
 
-app.options('*', (c) => {
+app.options('*', () => {
   return new Response(null, { status: 204 })
 })
 

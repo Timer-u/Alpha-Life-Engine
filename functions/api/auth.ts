@@ -10,6 +10,37 @@ const otpVerifySchema = z.object({
   otp: z.string().length(6).regex(/^\d{6}$/),
 });
 
+interface OtpRow {
+  id: number;
+  email: string;
+  code: string;
+  used: number;
+  created_at: string;
+  expires_at: string;
+}
+
+interface UserRow {
+  id: number;
+  email: string;
+  name: string | null;
+  avatar_url: string | null;
+  phone: string | null;
+  preferences: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface SessionRow {
+  id: number;
+  token: string;
+  user_id: number;
+  created_at: string;
+  expires_at: string;
+  last_active: string;
+  email: string;
+  name: string | null;
+}
+
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
@@ -93,22 +124,22 @@ authRouter.post('/otp/verify', async (c) => {
 
     const otpResult = await db.prepare(
       'SELECT * FROM otps WHERE email = ? AND code = ? AND used = 0 AND expires_at > ? LIMIT 1'
-    ).bind(email, otp, now).all();
+    ).bind(email, otp, now).all<OtpRow>();
 
     if (!otpResult.results?.length) {
       return c.json({ success: false, error: 'Invalid OTP', message: '验证码无效或已过期' }, 401);
     }
 
-    const otpRow = otpResult.results[0] as any;
+    const otpRow = otpResult.results[0];
     await db.prepare('UPDATE otps SET used = 1 WHERE id = ?').bind(otpRow.id).run();
 
-    let userResult = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).all();
-    let user: any;
+    const userResult = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).all<UserRow>();
+    let user: UserRow;
 
     if (!userResult.results?.length) {
       const insert = await db.prepare(
         'INSERT INTO users (email, name, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING *'
-      ).bind(email, email.split('@')[0], now, now).all();
+      ).bind(email, email.split('@')[0], now, now).all<UserRow>();
       user = insert.results![0];
 
       await db.prepare(
@@ -160,14 +191,14 @@ authRouter.get('/me', async (c) => {
   const now = nowIso();
   const session = await c.env.DB.prepare(
     'SELECT s.*, u.email, u.name FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND s.expires_at > ? LIMIT 1'
-  ).bind(match[1], now).all();
+  ).bind(match[1], now).all<SessionRow>();
 
   if (!session.results?.length) {
     c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
     return c.json({ success: false, error: 'Session expired' }, 401);
   }
 
-  const row = session.results[0] as any;
+  const row = session.results[0];
   await c.env.DB.prepare('UPDATE sessions SET last_active = ? WHERE id = ?').bind(now, row.id).run();
 
   return c.json({
