@@ -3,9 +3,7 @@ import {
   TriggerResponse,
   TriggerDecision,
   SignalType,
-  LayerType,
   TRIGGER_CONSTANTS,
-  ETF_CONSTANTS,
 } from '../types/api';
 
 export interface MarketPrices {
@@ -138,7 +136,7 @@ export class TriggerDecisionEngine {
     executed_amount: number,
     commission: number
   ): void {
-    console.log(`[Trigger] Decision:`, {
+    console.warn(`[Trigger] Decision:`, {
       user_id,
       balance,
       decision,
@@ -152,3 +150,4 @@ export class TriggerDecisionEngine {
 
 // Export a singleton instance
 export const triggerEngine = new TriggerDecisionEngine();
+

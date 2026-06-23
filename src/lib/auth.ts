@@ -1,4 +1,4 @@
-import type { Context } from 'hono';
+
 
 export async function sendOtpEmail(email: string, code: string, apiKey?: string): Promise<void> {
   if (!apiKey) {

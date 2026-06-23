@@ -10,7 +10,7 @@ interface User {
   name: string | null;
 }
 
-// 类型守卫：验证 /auth/me 的响应格式（仅有 user，没有 token/expires_at）
+// 类型守卫：验证 /auth/me 的响应格式
 function isMeResponse(obj: unknown): obj is { user: User } {
   if (!obj || typeof obj !== 'object') return false;
   const o = obj as Record<string, unknown>;
@@ -36,7 +36,6 @@ async function fetchMe(): Promise<{ user: User }> {
     throw new Error('Not authenticated');
   }
   const json = await res.json() as unknown;
-  // /me 只返回 { user }，没有 token/expires_at，用独立的 isMeResponse 校验
   if (!isApiResponse(json) || !isMeResponse(json.data)) {
     throw new Error('Invalid response format from /me');
   }
@@ -88,14 +87,13 @@ function isApiResponse(obj: unknown): obj is ApiResponse<unknown> {
     obj !== null &&
     typeof obj === 'object' &&
     'success' in obj &&
-    typeof (obj as any).success === 'boolean'
+    typeof (obj as Record<string, unknown>).success === 'boolean'
   );
 }
 
 export function useAuth() {
   const queryClient = useQueryClient();
 
-  // React Query 是唯一的数据源，消除与 useState 的双重管理
   const { data: meData, isLoading, isFetched } = useQuery({
     queryKey: ['auth', 'me'],
     queryFn: fetchMe,
@@ -103,7 +101,6 @@ export function useAuth() {
     staleTime: Infinity,
   });
 
-  // 直接从 React Query 数据派生，无额外 useState/useEffect
   const isAuthenticated = !!meData;
 
   // isLoading: 首次加载且无缓存数据
@@ -115,7 +112,6 @@ export function useAuth() {
   }, []);
 
   // 在 verifyOtp 成功后同步写入 React Query 缓存
-  // 这样 AuthGuard 挂载时能立即从缓存读到用户数据，无需等待 refetch
   const verifyOtpFn = useCallback(async (params: { email: string; otp: string }) => {
     const data = await verifyOtp(params);
     queryClient.setQueryData(['auth', 'me'], { user: data.user });

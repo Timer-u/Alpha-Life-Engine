@@ -34,6 +34,7 @@ export default function Login() {
       setStep('otp');
       startCountdown();
     } catch {
+      // requestOtpError 已在 UI 中通过 useAuth 显示
     }
   };
 
@@ -44,6 +45,7 @@ export default function Login() {
       await verifyOtp({ email: email.trim(), otp: otp.trim() });
       navigate('/', { replace: true });
     } catch {
+      // verifyOtpError 已在 UI 中通过 useAuth 显示
     }
   };
 
@@ -53,6 +55,7 @@ export default function Login() {
       await requestOtp(email.trim());
       startCountdown();
     } catch {
+      // requestOtpError 已在 UI 中通过 useAuth 显示
     }
   };
 

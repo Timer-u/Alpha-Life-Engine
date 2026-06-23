@@ -206,6 +206,6 @@ export function isApiResponse<T>(obj: unknown): obj is ApiResponse<T> {
     obj !== null &&
     typeof obj === 'object' &&
     'success' in obj &&
-    typeof (obj as any).success === 'boolean'
+    typeof (obj as Record<string, unknown>).success === 'boolean'
   );
 }
