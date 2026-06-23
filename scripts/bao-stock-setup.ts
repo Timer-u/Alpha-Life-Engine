@@ -12,119 +12,41 @@ interface BaoStockConfig {
   outputDir: string;
 }
 
-// 跟踪的 ETF 列表：安全层 + 进取层
 const TRACKED_ETFS = [
-  { code: 'sh.511360', name: '海富通短融ETF', layer: 'safe' },
-  { code: 'sh.511880', name: '银华日利', layer: 'safe' },
-  { code: 'sh.510300', name: '沪深300ETF', layer: 'ambition' },
-  { code: 'sh.510500', name: '中证500ETF', layer: 'ambition' },
-  { code: 'sh.515080', name: '招商中证红利ETF', layer: 'ambition' },
+  { code: 'sh.511360', name: 'Haitong Short-Term Bond ETF', layer: 'safe' },
+  { code: 'sh.511880', name: 'Yinhua Rili Money Market', layer: 'safe' },
+  { code: 'sh.510300', name: 'CSI 300 ETF', layer: 'ambition' },
+  { code: 'sh.510500', name: 'CSI 500 ETF', layer: 'ambition' },
+  { code: 'sh.515080', name: 'China Merchants Dividend ETF', layer: 'ambition' },
 ];
 
-export async function baoStockSetup() {
-  console.log('='.repeat(50));
-  console.log('BaoStock 历史数据初始化');
-  console.log('='.repeat(50));
-  console.log('');
-
-  const config: BaoStockConfig = {
-    codes: TRACKED_ETFS,
-    startDate: '1990-01-01',
-    endDate: new Date().toISOString().split('T')[0],
-    outputDir: resolve(process.cwd(), 'data/market_data'),
-  };
-
+function checkPythonDeps(): void {
   try {
-    mkdirSync(config.outputDir, { recursive: true });
-    console.log(`✅ 数据目录已创建: ${config.outputDir}`);
-    console.log('');
-
-    const pythonScript = createPythonScript(config);
-    const scriptPath = resolve(config.outputDir, 'download.py');
-    writeFileSync(scriptPath, pythonScript, 'utf8');
-    console.log(`✅ Python 脚本已创建: ${scriptPath}`);
-    console.log('');
-
-    console.log('📥 开始下载历史数据...');
-    console.log(`   时间范围: ${config.startDate} 到 ${config.endDate}`);
-    console.log(`   ETF: ${config.codes.map(c => `${c.code}(${c.name})`).join(', ')}`);
-    console.log('');
-    console.log('💡 提示：首次下载可能需要 10-30 分钟');
-    console.log('');
-
+    execSync('python -c "import baostock, pandas"', { stdio: 'ignore' });
+  } catch {
     try {
-      execSync(`python "${scriptPath}"`, { stdio: 'inherit' });
+      execSync('python3 -c "import baostock, pandas"', { stdio: 'ignore' });
     } catch {
-      execSync(`python3 "${scriptPath}"`, { stdio: 'inherit' });
-    }
-
-    // 生成 SQL 导入文件
-    generateImportSql(config);
-
-    console.log('');
-    console.log('='.repeat(50));
-    console.log('✅ BaoStock 初始化完成');
-    console.log('='.repeat(50));
-    console.log('');
-    console.log('下一步操作：');
-    console.log('1. 运行 npm run database:migrate 将数据导入 D1');
-    console.log('2. 或运行 npm run database:import-market 直接导入市场数据');
-    console.log('3. 配置 GitHub Actions 用于日常自动更新');
-    console.log('');
-  } catch (error) {
-    console.error('❌ BaoStock 初始化失败:', error);
-    process.exit(1);
-  }
-}
-
-function generateImportSql(config: BaoStockConfig): void {
-  console.log('\n📄 生成 SQL 导入文件...');
-  const sqlPath = resolve(config.outputDir, 'import_market_data.sql');
-  const lines: string[] = [
-    '-- Alpha-Life Engine Market Data Import',
-    `-- Generated: ${new Date().toISOString()}`,
-    '',
-  ];
-
-  for (const etf of config.codes) {
-    const csvFile = resolve(config.outputDir, `${etf.code.replace('.', '_')}.csv`);
-    try {
-      const csv = readFileSync(csvFile, 'utf8');
-      const rows = csv.split('\n').slice(1).filter(r => r.trim());
-      let count = 0;
-      for (const row of rows) {
-        const cols = row.split(',');
-        if (cols.length < 6) continue;
-        const [date, code, open, high, low, close, volume, amount] = cols.map(c => c.trim());
-        if (!date || !close) continue;
-        const symbol = etf.code.replace('sh.', '');
-        lines.push(
-          `INSERT OR IGNORE INTO market_data (symbol, date, open, high, low, close, volume) VALUES ('${symbol}', '${date}', ${open || 'NULL'}, ${high || 'NULL'}, ${low || 'NULL'}, ${close || 'NULL'}, ${volume || '0'});`
-        );
-        count++;
-      }
-      console.log(`   ${etf.name} (${etf.code}): ${count} 条记录`);
-    } catch {
-      console.log(`   ⚠️  ${etf.name}: 未找到 CSV 文件，跳过`);
+      console.error('ERROR: baostock or pandas not installed. Run: pip install baostock pandas');
+      process.exit(1);
     }
   }
-
-  writeFileSync(sqlPath, lines.join('\n'), 'utf8');
-  console.log(`✅ SQL 导入文件已生成: ${sqlPath}`);
 }
 
 function createPythonScript(config: BaoStockConfig): string {
   const codesJson = JSON.stringify(config.codes.map(c => [c.code, c.name]));
+  const safeOutDir = JSON.stringify(config.outputDir); // escapes backslashes
   return `#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-BaoStock 历史数据下载 + 每日更新脚本
+BaoStock historical data download + daily update script
 """
 
 import baostock as bs
 import pandas as pd
 import sys
 import os
+import time
 from datetime import datetime, timedelta
 
 class BaoStockDownloader:
@@ -134,18 +56,18 @@ class BaoStockDownloader:
         self.start_date = '1990-01-01'
         self.end_date = datetime.now().strftime('%Y-%m-%d')
 
-    def login(self):
-        try:
-            lg = bs.login()
-            if lg.error_code == '0':
-                print(f"[OK] BaoStock 登录成功")
-                return True
-            else:
-                print(f"[FAIL] 登录失败: {lg.msg}")
-                return False
-        except Exception as e:
-            print(f"[FAIL] 登录异常: {e}")
-            return False
+    def login(self, retries=3):
+        for attempt in range(retries):
+            try:
+                lg = bs.login()
+                if lg.error_code == '0':
+                    print(f"[OK] BaoStock login successful")
+                    return True
+                print(f"[FAIL] Login failed (attempt {attempt+1}/{retries}): {lg.msg}")
+            except Exception as e:
+                print(f"[FAIL] Login exception (attempt {attempt+1}/{retries}): {e}")
+            time.sleep(2)
+        return False
 
     def download_k_data(self, code: str, name: str, start_date: str = None):
         print(f"  -> {name} ({code})")
@@ -183,10 +105,10 @@ class BaoStockDownloader:
                 filename = f"{code.replace('.', '_')}.csv"
                 filepath = os.path.join(self.output_dir, filename)
                 df.to_csv(filepath, index=False)
-                print(f"     [OK] {len(data)} 条记录")
+                print(f"     [OK] {len(data)} records")
                 return data
             else:
-                print(f"     [SKIP] 无数据")
+                print(f"     [SKIP] No data")
                 return None
         except Exception as e:
             print(f"     [FAIL] {e}")
@@ -201,24 +123,23 @@ class BaoStockDownloader:
                 data = self.download_k_data(code, name)
                 if data:
                     total += len(data)
-            print(f"\\n[OK] 全部完成: {len(self.codes)} 个 ETF, {total} 条记录")
+            print(f"\\n[OK] All done: {len(self.codes)} ETFs, {total} records")
             return True
         finally:
             bs.logout()
 
     def download_latest(self, days_back: int = 5):
-        """仅下载最近 N 个交易日的数据（用于每日更新）"""
         if not self.login():
             return False
         try:
             start = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
-            print(f"[INFO] 获取最近 {days_back} 天数据 (自 {start})")
+            print(f"[INFO] Fetching last {days_back} days from {start}")
             total = 0
             for code, name in self.codes:
                 data = self.download_k_data(code, name, start_date=start)
                 if data:
                     total += len(data)
-            print(f"\\n[OK] 每日更新完成: {total} 条新记录")
+            print(f"\\n[OK] Daily update done: {total} new records")
             return True
         finally:
             bs.logout()
@@ -226,7 +147,7 @@ class BaoStockDownloader:
 if __name__ == '__main__':
     import sys
     mode = sys.argv[1] if len(sys.argv) > 1 else 'full'
-    downloader = BaoStockDownloader('${config.outputDir}')
+    downloader = BaoStockDownloader(${safeOutDir})
     if mode == 'daily':
         success = downloader.download_latest()
     else:
@@ -235,7 +156,119 @@ if __name__ == '__main__':
 `;
 }
 
-// 当直接运行时执行
+function generateImportSql(config: BaoStockConfig): void {
+  console.log('\nGenerating SQL import file...');
+  const sqlPath = resolve(config.outputDir, 'import_market_data.sql');
+  const lines: string[] = [
+    '-- Alpha-Life Engine Market Data Import',
+    `-- Generated: ${new Date().toISOString()}`,
+    ''
+  ];
+
+  for (const etf of config.codes) {
+    const csvFile = resolve(config.outputDir, `${etf.code.replace('.', '_')}.csv`);
+    try {
+      const csv = readFileSync(csvFile, 'utf8');
+      const rows = csv.split('\n').slice(1).filter(r => r.trim());
+      const batchRows: string[] = [];
+      for (const row of rows) {
+        const cols = row.split(',');
+        if (cols.length < 6) continue;
+        const [date, code, open, high, low, close, volume, amount] = cols.map(c => c.trim());
+        if (!date || !close) continue;
+        const symbol = etf.code.replace('sh.', '');
+        batchRows.push(
+          `('${symbol}', '${date}', ${open || 'NULL'}, ${high || 'NULL'}, ${low || 'NULL'}, ${close || 'NULL'}, ${volume || '0'})`
+        );
+      }
+      const chunkSize = 500;
+      for (let i = 0; i < batchRows.length; i += chunkSize) {
+        const chunk = batchRows.slice(i, i + chunkSize);
+        lines.push(`INSERT OR IGNORE INTO market_data (symbol, date, open, high, low, close, volume) VALUES ${chunk.join(',')};`);
+      }
+      console.log(`   ${etf.name} (${etf.code}): ${batchRows.length} records`);
+    } catch {
+      console.log(`   WARNING: ${etf.name} CSV not found, skipped`);
+    }
+  }
+
+  writeFileSync(sqlPath, lines.join('\n'), 'utf8');
+  console.log(`SQL import file generated: ${sqlPath}`);
+}
+
+export async function baoStockSetup() {
+  console.log('='.repeat(50));
+  console.log('BaoStock Historical Data Initialization');
+  console.log('='.repeat(50));
+  console.log('');
+
+  checkPythonDeps();
+
+  const config: BaoStockConfig = {
+    codes: TRACKED_ETFS,
+    startDate: '1990-01-01',
+    endDate: new Date().toISOString().split('T')[0],
+    outputDir: resolve(process.cwd(), 'data/market_data'),
+  };
+
+  try {
+    mkdirSync(config.outputDir, { recursive: true });
+    console.log(`Data directory created: ${config.outputDir}`);
+    console.log('');
+
+    const pythonScript = createPythonScript(config);
+    const scriptPath = resolve(config.outputDir, 'download.py');
+    writeFileSync(scriptPath, pythonScript, 'utf8');
+    console.log(`Python script created: ${scriptPath}`);
+    console.log('');
+
+    console.log('Downloading historical data...');
+    console.log(`   Range: ${config.startDate} to ${config.endDate}`);
+    console.log(`   ETFs: ${config.codes.map(c => `${c.code}(${c.name})`).join(', ')}`);
+    console.log('');
+    console.log('Note: First-time download may take 10-30 minutes');
+    console.log('');
+
+    let executed = false;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        execSync(`python "${scriptPath}"`, { stdio: 'inherit' });
+        executed = true;
+        break;
+      } catch {
+        try {
+          execSync(`python3 "${scriptPath}"`, { stdio: 'inherit' });
+          executed = true;
+          break;
+        } catch {
+          if (attempt === 1) {
+            console.log('Retrying Python execution...');
+            continue;
+          } else {
+            throw new Error('Python execution failed after retries');
+          }
+        }
+      }
+    }
+    if (!executed) throw new Error('Could not run Python script');
+
+    generateImportSql(config);
+
+    console.log('');
+    console.log('='.repeat(50));
+    console.log('BaoStock initialization completed');
+    console.log('='.repeat(50));
+    console.log('');
+    console.log('Next steps:');
+    console.log('1. Run npm run database:migrate to import data into D1');
+    console.log('2. Configure GitHub Actions for automated daily updates');
+    console.log('');
+  } catch (error) {
+    console.error('BaoStock initialization failed:', error);
+    process.exit(1);
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url);
 if (process.argv[1] === __filename) {
   baoStockSetup().catch(error => {

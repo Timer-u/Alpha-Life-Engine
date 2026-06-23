@@ -3,13 +3,13 @@ name: Daily Market Data Update
 on:
   schedule:
     # 交易日 08:00 CST (00:00 UTC) — 取前一交易日数据
-    - cron: '0 0 * * 1-5'
+    - cron: "0 0 * * 1-5"
   workflow_dispatch:
     inputs:
       env:
-        description: 'Target environment'
+        description: "Target environment"
         required: true
-        default: 'production'
+        default: "production"
         type: choice
         options:
           - production
@@ -30,17 +30,18 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
 
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install Python dependencies
         run: |
           pip install baostock pandas
+          python -c "import baostock, pandas"
 
       - name: Install Node dependencies
         run: npm ci
@@ -52,8 +53,15 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx tsx scripts/daily-market-update.ts ${{ github.event.inputs.env == 'development' && '--local' || '--prod' }}
+          D1_DEV_NAME: alpha-life-dev
+          D1_PROD_NAME: alpha-life-prod
+        run: |
+          if [ "${{ github.event.inputs.env }}" == "development" ]; then
+            npx tsx scripts/daily-market-update.ts --local
+          else
+            npx tsx scripts/daily-market-update.ts --prod
+          fi
 
       - name: Notify on failure
         if: failure()
-        run: echo "❌ Market data update failed for $(date -u)"
+        run: echo "Market data update failed for $(date -u)"
