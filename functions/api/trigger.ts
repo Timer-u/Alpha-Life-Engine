@@ -4,22 +4,16 @@ import { triggerEngine } from '../../src/lib/trigger-engine';
 import type { Env, Variables } from './[[route]]';
 import type { TriggerInput, SignalType } from '../../src/types/api';
 import type { MarketPrices } from '../../src/lib/trigger-engine';
+import { sessionMiddleware } from './auth';
 
 const triggerRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// ============================================================
-// 跟踪的 ETF 列表（与 BaoStock 脚本保持一致）
-// ============================================================
 const TRACKED_SYMBOLS = ['511360', '511880', '000300', '000905', '000922'];
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
-/**
- * 从 MarketData 表查询指定 ETF 的最新收盘价
- * 按 symbol + date 取每个 symbol 的最新记录
- */
 async function fetchLatestPrices(db: D1Database): Promise<MarketPrices> {
   const prices: MarketPrices = {};
 
@@ -36,37 +30,7 @@ async function fetchLatestPrices(db: D1Database): Promise<MarketPrices> {
   return prices;
 }
 
-// Session middleware
-triggerRouter.use('*', async (c, next) => {
-  const cookie = c.req.header('cookie') || '';
-  const match = cookie.match(/session_token=([^;\s]+)/);
-  if (!match) {
-    return c.json({ success: false, error: 'Unauthorized', message: '未登录' }, 401);
-  }
-
-  const now = nowIso();
-  const session = await c.env.DB.prepare(
-    'SELECT s.*, u.email, u.name FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND s.expires_at > ? LIMIT 1'
-  ).bind(match[1], now).all<{
-    id: number;
-    token: string;
-    user_id: number;
-    created_at: string;
-    expires_at: string;
-    last_active: string;
-    email: string;
-    name: string;
-  }>();
-
-  if (!session.results || session.results.length === 0) {
-    c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
-    return c.json({ success: false, error: 'Unauthorized', message: '会话已过期' }, 401);
-  }
-
-  const row = session.results[0];
-  c.set('userId', row.user_id);
-  await next();
-});
+triggerRouter.use('*', sessionMiddleware);
 
 const triggerSchema = z.object({
   current_balance: z.number().min(0),

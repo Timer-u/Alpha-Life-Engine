@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Env, Variables } from './[[route]]';
+import { sessionMiddleware } from './auth';
 
 const transactionRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -8,37 +9,7 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-// Session middleware (same pattern)
-transactionRouter.use('*', async (c, next) => {
-  const cookie = c.req.header('cookie') || '';
-  const match = cookie.match(/session_token=([^;\s]+)/);
-  if (!match) {
-    return c.json({ success: false, error: 'Unauthorized', message: '未登录' }, 401);
-  }
-
-  const now = nowIso();
-  const session = await c.env.DB.prepare(
-    'SELECT s.*, u.email, u.name FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND s.expires_at > ? LIMIT 1'
-  ).bind(match[1], now).all<{
-    id: number;
-    token: string;
-    user_id: number;
-    created_at: string;
-    expires_at: string;
-    last_active: string;
-    email: string;
-    name: string;
-  }>();
-
-  if (!session.results || session.results.length === 0) {
-    c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
-    return c.json({ success: false, error: 'Unauthorized', message: '会话已过期' }, 401);
-  }
-
-  const row = session.results[0];
-  c.set('userId', row.user_id);
-  await next();
-});
+transactionRouter.use('*', sessionMiddleware);
 
 const transactionSchema = z.object({
   symbol: z.string().min(1),

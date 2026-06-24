@@ -102,7 +102,8 @@ CREATE TABLE IF NOT EXISTS strategy_reports (
   parameter_count INTEGER DEFAULT 0,
   evolution_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
   next_scheduled_evolution DATETIME,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, evolution_timestamp)
 );
 
 -- 对账记录表
@@ -171,6 +172,8 @@ CREATE INDEX IF NOT EXISTS idx_transactions_user_created ON transactions(user_id
 CREATE INDEX IF NOT EXISTS idx_market_data_symbol_date ON market_data(symbol, date);
 CREATE INDEX IF NOT EXISTS idx_trigger_log_user_created ON trigger_log(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_strategy_reports_user_id ON strategy_reports(user_id);
+-- 注: 新数据库在 CREATE TABLE 中包含 UNIQUE(user_id, evolution_timestamp)
+-- 已有数据库需手动迁移: CREATE UNIQUE INDEX IF NOT EXISTS idx_sr_user_evo ON strategy_reports(user_id, evolution_timestamp);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_otps_email ON otps(email);
 CREATE INDEX IF NOT EXISTS idx_email_whitelist_email ON email_whitelist(email);

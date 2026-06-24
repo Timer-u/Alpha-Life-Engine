@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from './[[route]]';
+import { sessionMiddleware } from './auth';
 
 const portfolioRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -34,10 +35,8 @@ async function enrichPositionsWithMarketPrices(
 }>> {
   if (positions.length === 0) return [];
 
-  // 收集所有 symbol
   const symbols = [...new Set(positions.map(p => p.symbol))];
 
-  // 批量查询每个 symbol 的最新收盘价
   const priceMap: Record<string, number> = {};
   for (const symbol of symbols) {
     const result = await db.prepare(
@@ -50,7 +49,6 @@ async function enrichPositionsWithMarketPrices(
     }
   }
 
-  // 更新股票的当前价格和市值
   const now = nowIso();
   return positions.map(pos => {
     const latestPrice = priceMap[pos.symbol];
@@ -66,37 +64,8 @@ async function enrichPositionsWithMarketPrices(
   });
 }
 
-// Session middleware
-portfolioRouter.use('*', async (c, next) => {
-  const cookie = c.req.header('cookie') || '';
-  const match = cookie.match(/session_token=([^;\s]+)/);
-  if (!match) {
-    return c.json({ success: false, error: 'Unauthorized', message: '未登录' }, 401);
-  }
-
-  const now = nowIso();
-  const session = await c.env.DB.prepare(
-    'SELECT s.*, u.email, u.name FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND s.expires_at > ? LIMIT 1'
-  ).bind(match[1], now).all<{
-    id: number;
-    token: string;
-    user_id: number;
-    created_at: string;
-    expires_at: string;
-    last_active: string;
-    email: string;
-    name: string;
-  }>();
-
-  if (!session.results || session.results.length === 0) {
-    c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
-    return c.json({ success: false, error: 'Unauthorized', message: '会话已过期' }, 401);
-  }
-
-  const row = session.results[0];
-  c.set('userId', row.user_id);
-  await next();
-});
+// Reusable session middleware
+portfolioRouter.use('*', sessionMiddleware);
 
 // GET /api/portfolio
 portfolioRouter.get('/', async (c) => {

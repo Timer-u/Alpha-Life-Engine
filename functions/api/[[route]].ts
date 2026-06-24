@@ -4,6 +4,7 @@ import { authRouter } from './auth'
 import { portfolioRouter } from './portfolio'
 import { transactionRouter } from './transaction'
 import { triggerRouter } from './trigger'
+import { strategyRouter } from './strategy'
 
 export interface Env {
   DB: D1Database
@@ -32,7 +33,7 @@ app.use(
   cors({
     origin: ['http://localhost:3000', 'https://alpha-life.yourdomain.com'],
     credentials: true,
-    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'Cookie'],
   })
 )
@@ -54,6 +55,7 @@ app.route('/auth', authRouter)
 app.route('/portfolio', portfolioRouter)
 app.route('/transactions', transactionRouter)
 app.route('/trigger', triggerRouter)
+app.route('/strategy', strategyRouter)
 
 app.notFound((c) => {
   return c.json(

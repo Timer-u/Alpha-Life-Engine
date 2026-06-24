@@ -1,6 +1,45 @@
 import { Hono } from 'hono';
+import type { Context, Next } from 'hono';
 import { z } from 'zod';
-import type { Env } from './[[route]]';
+import type { Env, Variables } from './[[route]]';
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+export async function sessionMiddleware(c: Context<{ Bindings: Env; Variables: Variables }>, next: Next) {
+  const cookie = c.req.header('cookie') || '';
+  const match = cookie.match(/session_token=([^;\s]+)/);
+  if (!match) {
+    return c.json({ success: false, error: 'Unauthorized', message: '未登录' }, 401);
+  }
+
+  const now = nowIso();
+  const session = await c.env.DB.prepare(
+    'SELECT s.*, u.email, u.name FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND s.expires_at > ? LIMIT 1'
+  ).bind(match[1], now).all<{
+    id: number;
+    token: string;
+    user_id: number;
+    created_at: string;
+    expires_at: string;
+    last_active: string;
+    email: string;
+    name: string;
+  }>();
+
+  if (!session.results || session.results.length === 0) {
+    c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
+    return c.json({ success: false, error: 'Unauthorized', message: '会话已过期' }, 401);
+  }
+
+  const row = session.results[0];
+  c.set('userId', row.user_id);
+
+  c.env.DB.prepare('UPDATE sessions SET last_active = ? WHERE id = ?').bind(now, row.id).run().catch(() => {});
+
+  await next();
+}
 
 const authRouter = new Hono<{ Bindings: Env }>();
 
@@ -49,10 +88,6 @@ function generateToken(): string {
   const arr = new Uint8Array(32);
   crypto.getRandomValues(arr);
   return Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function nowIso(): string {
-  return new Date().toISOString();
 }
 
 function addDays(days: number): string {
