@@ -11,7 +11,7 @@ export async function seedDatabase() {
   console.log('='.repeat(50));
 
   try {
-    const env = process.env.CLOUDFLARE_ENV || 'development';
+    const env = process.env.CLOUDFLARE_ENV ?? 'development';
     const dbName = env === 'production' ? 'alpha-life-prod' : 'alpha-life-dev';
 
     console.log(`目标数据库: ${dbName} (${env})`);
@@ -36,5 +36,5 @@ export async function seedDatabase() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  seedDatabase();
+  void seedDatabase();
 }

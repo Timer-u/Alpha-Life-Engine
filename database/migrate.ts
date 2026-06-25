@@ -15,7 +15,7 @@ export function runMigration() {
     const envArgIndex = args.findIndex(arg => arg === '--env' || arg === '-e');
     const env = envArgIndex >= 0 && args[envArgIndex + 1]
       ? args[envArgIndex + 1]
-      : process.env.CLOUDFLARE_ENV || 'development';
+       : process.env.CLOUDFLARE_ENV ?? 'development';
     const dbName = env === 'production' ? 'alpha-life-prod' : 'alpha-life-dev';
 
     console.log(`目标数据库: ${dbName} (${env})`);

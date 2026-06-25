@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
+import { execSync } from 'child_process';
 import { writeFileSync, mkdirSync, readFileSync } from 'fs';
 import { resolve } from 'path';
-import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 interface BaoStockConfig {
@@ -173,7 +173,7 @@ function generateImportSql(config: BaoStockConfig): void {
       for (const row of rows) {
         const cols = row.split(',');
         if (cols.length < 6) continue;
-        const [date, code, open, high, low, close, volume, amount] = cols.map(c => c.trim());
+        const [date, code, open, high, low, close, volume, _amount] = cols.map(c => c.trim());
         if (!date || !close) continue;
         // Extract symbol: remove 'sh.' or 'sz.' prefix
         const symbol = code.replace(/^(sh|sz)\./, '');

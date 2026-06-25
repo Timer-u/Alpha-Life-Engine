@@ -9,9 +9,9 @@
  *   npm run market:update -- --prod   # production (--remote)
  */
 
+import { execSync } from 'child_process';
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
-import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -30,7 +30,7 @@ function parseArgs(): { env: 'development' | 'production'; dbName: string } {
   const env = isProd ? 'production' : 'development';
   const dbKey = isProd ? 'D1_PROD_NAME' : 'D1_DEV_NAME';
   const defaultName = isProd ? 'alpha-life-prod' : 'alpha-life-dev';
-  const dbName = process.env[dbKey] || defaultName;
+  const dbName = process.env[dbKey] ?? defaultName;
   return { env, dbName };
 }
 
@@ -127,7 +127,7 @@ function generateInsertSql(data: Array<{
   for (let i = 0; i < data.length; i += batchSize) {
     const batch = data.slice(i, i + batchSize);
     const values = batch.map(row =>
-      `('${row.symbol}', '${row.date}', ${row.open ?? 'NULL'}, ${row.high ?? 'NULL'}, ${row.low ?? 'NULL'}, ${row.close ?? 'NULL'}, ${row.volume ?? 0})`
+      `('${row.symbol}', '${row.date}', ${row.open ?? 'NULL'}, ${row.high ?? 'NULL'}, ${row.low ?? 'NULL'}, ${row.close ?? 'NULL'}, ${row.volume})`
     ).join(',');
     lines.push(`INSERT OR IGNORE INTO market_data (symbol, date, open, high, low, close, volume) VALUES ${values};`);
   }
@@ -136,24 +136,22 @@ function generateInsertSql(data: Array<{
 
 function execPythonWithRetry(scriptPath: string, args: string[] = []): string {
   const maxAttempts = 2;
-  let lastError: Error | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return execSync(`python "${scriptPath}" ${args.join(' ')}`, { encoding: 'utf8', timeout: 120000 });
-    } catch (e: any) {
-      lastError = e;
+    } catch {
       try {
         return execSync(`python3 "${scriptPath}" ${args.join(' ')}`, { encoding: 'utf8', timeout: 120000 });
-      } catch (e2: any) {
-        lastError = e2;
+      } catch {
         if (attempt < maxAttempts) {
           console.log(`Retry ${attempt}/${maxAttempts} after error...`);
           continue;
         }
+        throw new Error(`Python execution failed after ${maxAttempts} attempts`);
       }
     }
   }
-  throw new Error(`Python execution failed after ${maxAttempts} attempts: ${lastError?.message || 'unknown error'}`);
+  throw new Error(`Python execution failed after ${maxAttempts} attempts`);
 }
 
 function fetchDataViaPython(outputDir: string): Array<{
