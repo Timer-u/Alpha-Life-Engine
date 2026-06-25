@@ -1,9 +1,12 @@
+import type { MarketPrices } from '../../src/lib/trigger-engine';
+import type { TriggerInput, SignalType } from '../../src/types/api';
+import type { Env, Variables } from './[[route]]';
+
 import { Hono } from 'hono';
 import { z } from 'zod';
+
 import { triggerEngine } from '../../src/lib/trigger-engine';
-import type { Env, Variables } from './[[route]]';
-import type { TriggerInput, SignalType } from '../../src/types/api';
-import type { MarketPrices } from '../../src/lib/trigger-engine';
+
 import { sessionMiddleware } from './auth';
 
 const triggerRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -20,9 +23,9 @@ async function fetchLatestPrices(db: D1Database): Promise<MarketPrices> {
   for (const symbol of TRACKED_SYMBOLS) {
     const result = await db.prepare(
       `SELECT close FROM market_data WHERE symbol = ? ORDER BY date DESC LIMIT 1`
-    ).bind(symbol).all<{ close: number }>();
+    ).bind(symbol).all<{ close: number | null }>();
 
-    if (result.results && result.results.length > 0 && result.results[0].close !== null) {
+    if (result.results.length > 0 && result.results[0].close !== null) {
       prices[symbol] = result.results[0].close;
     }
   }
@@ -65,7 +68,7 @@ triggerRouter.post('/', async (c) => {
     await c.env.DB.prepare(
       'INSERT INTO trigger_log (user_id, balance, trigger_decision, signal_value, executed_amount, commission, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).bind(userId, input.current_balance, response.decision, input.signal_value,
-      response.executed_amount || 0, response.commission, nowIso()).run();
+      response.executed_amount ?? 0, response.commission, nowIso()).run();
 
     return c.json({ success: true, data: response, message: response.message, timestamp: nowIso() });
   } catch (error) {

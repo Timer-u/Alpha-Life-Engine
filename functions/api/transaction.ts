@@ -1,6 +1,8 @@
+import type { Env, Variables } from './[[route]]';
+
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { Env, Variables } from './[[route]]';
+
 import { sessionMiddleware } from './auth';
 
 const transactionRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -26,7 +28,7 @@ const transactionSchema = z.object({
 transactionRouter.get('/', async (c) => {
   try {
     const userId = c.get('userId');
-    const limit = parseInt(c.req.query('limit') || '100', 10);
+    const limit = parseInt(c.req.query('limit') ?? '100', 10);
     const result = await c.env.DB.prepare(
       'SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?'
     ).bind(userId, limit).all<{
@@ -44,7 +46,7 @@ transactionRouter.get('/', async (c) => {
       notes: string | null;
     }>();
 
-    return c.json({ success: true, data: result.results || [], timestamp: nowIso() });
+    return c.json({ success: true, data: result.results, timestamp: nowIso() });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return c.json({ success: false, error: 'Failed', message }, 500);
@@ -59,13 +61,13 @@ transactionRouter.post('/', async (c) => {
     const db = c.env.DB;
 
     const amount = data.shares * data.price;
-    const commission = data.commission !== undefined ? data.commission : Math.max(amount * 0.0003, 5);
+    const commission = data.commission ?? Math.max(amount * 0.0003, 5);
 
     const result = await db.prepare(
       `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, created_at, notes)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
     ).bind(userId, data.symbol, data.shares, data.price, amount, commission,
-      data.transaction_type, data.trigger_signal || null, data.layer, nowIso(), data.notes || null).all<{
+      data.transaction_type, data.trigger_signal ?? null, data.layer, nowIso(), data.notes ?? null).all<{
         id: number;
         user_id: number;
         symbol: string;
@@ -91,7 +93,7 @@ transactionRouter.post('/', async (c) => {
       created_at: string;
       updated_at: string;
     }>();
-    if (portfolioResult.results && portfolioResult.results.length > 0) {
+    if (portfolioResult.results.length > 0) {
       const portfolio = portfolioResult.results[0];
       const totalCost = amount + commission;
 
@@ -110,7 +112,7 @@ transactionRouter.post('/', async (c) => {
       }
     }
 
-    const inserted = result.results?.[0] || null;
+    const inserted = result.results[0] ?? null;
     return c.json({ success: true, data: inserted, message: '交易记录已创建', timestamp: nowIso() }, 201);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';

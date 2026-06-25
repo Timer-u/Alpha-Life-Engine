@@ -1,14 +1,15 @@
-import { Hono } from 'hono';
-import type { Context, Next } from 'hono';
-import { z } from 'zod';
 import type { Env, Variables } from './[[route]]';
+import type { Context, Next } from 'hono';
+
+import { Hono } from 'hono';
+import { z } from 'zod';
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
 export async function sessionMiddleware(c: Context<{ Bindings: Env; Variables: Variables }>, next: Next) {
-  const cookie = c.req.header('cookie') || '';
+  const cookie = c.req.header('cookie') ?? '';
   const match = cookie.match(/session_token=([^;\s]+)/);
   if (!match) {
     return c.json({ success: false, error: 'Unauthorized', message: '未登录' }, 401);
@@ -28,7 +29,7 @@ export async function sessionMiddleware(c: Context<{ Bindings: Env; Variables: V
     name: string;
   }>();
 
-  if (!session.results || session.results.length === 0) {
+  if (session.results.length === 0) {
     c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
     return c.json({ success: false, error: 'Unauthorized', message: '会话已过期' }, 401);
   }
@@ -133,7 +134,7 @@ authRouter.post('/otp/request', async (c) => {
       'SELECT * FROM email_whitelist WHERE email = ? LIMIT 1'
     ).bind(email).all();
 
-    if (!whitelist.results?.length) {
+    if (!whitelist.results.length) {
       return c.json({ success: false, error: 'Unauthorized', message: '邮箱未在白名单中' }, 403);
     }
 
@@ -161,7 +162,7 @@ authRouter.post('/otp/verify', async (c) => {
       'SELECT * FROM otps WHERE email = ? AND code = ? AND used = 0 AND expires_at > ? LIMIT 1'
     ).bind(email, otp, now).all<OtpRow>();
 
-    if (!otpResult.results?.length) {
+    if (!otpResult.results.length) {
       return c.json({ success: false, error: 'Invalid OTP', message: '验证码无效或已过期' }, 401);
     }
 
@@ -171,7 +172,7 @@ authRouter.post('/otp/verify', async (c) => {
     const userResult = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).all<UserRow>();
     let user: UserRow;
 
-    if (!userResult.results?.length) {
+    if (!userResult.results.length) {
       const insert = await db.prepare(
         'INSERT INTO users (email, name, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING *'
       ).bind(email, email.split('@')[0], now, now).all<UserRow>();
@@ -206,7 +207,7 @@ authRouter.post('/otp/verify', async (c) => {
 
 // POST /api/auth/logout
 authRouter.post('/logout', async (c) => {
-  const cookie = c.req.header('cookie') || '';
+  const cookie = c.req.header('cookie') ?? '';
   const match = cookie.match(/session_token=([^;\s]+)/);
   if (match) {
     await c.env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(match[1]).run();
@@ -217,7 +218,7 @@ authRouter.post('/logout', async (c) => {
 
 // GET /api/auth/me
 authRouter.get('/me', async (c) => {
-  const cookie = c.req.header('cookie') || '';
+  const cookie = c.req.header('cookie') ?? '';
   const match = cookie.match(/session_token=([^;\s]+)/);
   if (!match) {
     return c.json({ success: false, error: 'Unauthorized' }, 401);
@@ -228,7 +229,7 @@ authRouter.get('/me', async (c) => {
     'SELECT s.*, u.email, u.name FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND s.expires_at > ? LIMIT 1'
   ).bind(match[1], now).all<SessionRow>();
 
-  if (!session.results?.length) {
+  if (!session.results.length) {
     c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
     return c.json({ success: false, error: 'Session expired' }, 401);
   }

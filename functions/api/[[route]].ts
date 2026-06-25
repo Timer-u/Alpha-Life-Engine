@@ -1,10 +1,12 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+
 import { authRouter } from './auth'
+import { marketDataRouter } from './market-data'
 import { portfolioRouter } from './portfolio'
+import { strategyRouter } from './strategy'
 import { transactionRouter } from './transaction'
 import { triggerRouter } from './trigger'
-import { strategyRouter } from './strategy'
 
 export interface Env {
   DB: D1Database
@@ -43,10 +45,9 @@ app.options('*', () => {
 })
 
 app.get('/health', (c) => {
-  const env = c.env || {}
   return c.json({
     success: true,
-    data: { status: 'ok', env: env.ENVIRONMENT },
+    data: { status: 'ok', env: c.env.ENVIRONMENT },
     timestamp: new Date().toISOString(),
   })
 })
@@ -56,6 +57,7 @@ app.route('/portfolio', portfolioRouter)
 app.route('/transactions', transactionRouter)
 app.route('/trigger', triggerRouter)
 app.route('/strategy', strategyRouter)
+app.route('/market-data', marketDataRouter)
 
 app.notFound((c) => {
   return c.json(
@@ -71,12 +73,11 @@ app.notFound((c) => {
 
 app.onError((err, c) => {
   console.error('API Error:', err)
-  const env = c.env || {}
   return c.json(
     {
       success: false,
       error: 'Internal Server Error',
-      message: env.ENVIRONMENT === 'development' ? err.message : 'Something went wrong',
+      message: c.env.ENVIRONMENT === 'development' ? err.message : 'Something went wrong',
       timestamp: new Date().toISOString(),
     },
     500

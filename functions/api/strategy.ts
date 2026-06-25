@@ -1,6 +1,8 @@
+import type { Env, Variables } from './[[route]]';
+
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { Env, Variables } from './[[route]]';
+
 import { sessionMiddleware } from './auth';
 
 const strategyRouter = new Hono<{ Bindings: Env; Variables: Variables }>();

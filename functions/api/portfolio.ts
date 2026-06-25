@@ -1,5 +1,7 @@
-import { Hono } from 'hono';
 import type { Env, Variables } from './[[route]]';
+
+import { Hono } from 'hono';
+
 import { sessionMiddleware } from './auth';
 
 const portfolioRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -43,7 +45,7 @@ async function enrichPositionsWithMarketPrices(
       `SELECT close FROM market_data WHERE symbol = ? AND close IS NOT NULL ORDER BY date DESC LIMIT 1`
     ).bind(symbol).all<{ close: number }>();
 
-    if (result.results && result.results.length > 0) {
+    if (result.results.length > 0) {
       const closePrice = result.results[0].close;
       priceMap[symbol] = closePrice > 0 ? closePrice : result.results[0].close;
     }
@@ -83,7 +85,7 @@ portfolioRouter.get('/', async (c) => {
       created_at: string;
       updated_at: string;
     }>();
-    const portfolio = portfolioResult.results?.[0] || null;
+    const portfolio = portfolioResult.results[0] ?? null;
 
     const positionsResult = await db.prepare('SELECT * FROM positions WHERE user_id = ? ORDER BY created_at DESC').bind(userId).all<{
       id: number;
@@ -99,7 +101,7 @@ portfolioRouter.get('/', async (c) => {
       created_at: string;
       updated_at: string;
     }>();
-    const rawPositions = positionsResult.results || [];
+    const rawPositions = positionsResult.results;
 
     const positions = await enrichPositionsWithMarketPrices(db, rawPositions);
 
@@ -119,7 +121,7 @@ portfolioRouter.get('/', async (c) => {
       created_at: string;
       notes: string | null;
     }>();
-    const recentTransactions = txResult.results || [];
+    const recentTransactions = txResult.results;
 
     const triggerResult = await db.prepare(
       'SELECT * FROM trigger_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 1'
@@ -133,7 +135,7 @@ portfolioRouter.get('/', async (c) => {
       commission: number;
       created_at: string;
     }>();
-    const lastTrigger = triggerResult.results?.[0] || null;
+    const lastTrigger = triggerResult.results[0] ?? null;
 
     const strategyResult = await db.prepare(
       'SELECT * FROM strategy_reports WHERE user_id = ? ORDER BY created_at DESC LIMIT 1'
@@ -148,17 +150,15 @@ portfolioRouter.get('/', async (c) => {
       next_scheduled_evolution: string | null;
       created_at: string;
     }>();
-    const lastStrategy = strategyResult.results?.[0] || null;
+    const lastStrategy = strategyResult.results[0] ?? null;
 
     let daysSinceEvolution = 999;
     let pboScore: number | null = null;
     let statusColor: 'green' | 'yellow' | 'red' = 'red';
 
-    if (lastStrategy) {
-      const lastEvolution = new Date(lastStrategy.evolution_timestamp);
-      daysSinceEvolution = Math.floor((Date.now() - lastEvolution.getTime()) / (1000 * 60 * 60 * 24));
-      pboScore = lastStrategy.pbo_score;
-    }
+    const lastEvolution = new Date(lastStrategy.evolution_timestamp);
+    daysSinceEvolution = Math.floor((Date.now() - lastEvolution.getTime()) / (1000 * 60 * 60 * 24));
+    pboScore = lastStrategy.pbo_score;
 
     if (daysSinceEvolution <= 7) statusColor = 'green';
     else if (daysSinceEvolution <= 45) statusColor = 'yellow';
@@ -166,7 +166,7 @@ portfolioRouter.get('/', async (c) => {
 
     if (pboScore !== null && pboScore > 0.5) statusColor = 'red';
 
-    const balance = portfolio ? portfolio.total_balance : 0;
+    const balance = portfolio.total_balance;
 
     return c.json({
       success: true,
@@ -178,11 +178,11 @@ portfolioRouter.get('/', async (c) => {
           current_balance: balance,
           trigger_line: 1667,
           status: balance < 1667 ? 'accumulating' : 'triggerable',
-          last_decision: lastTrigger?.trigger_decision,
-          last_decision_time: lastTrigger?.created_at,
+          last_decision: lastTrigger.trigger_decision,
+          last_decision_time: lastTrigger.created_at,
         },
         strategy_evolution: {
-          last_evolution: lastStrategy?.evolution_timestamp || null,
+          last_evolution: lastStrategy.evolution_timestamp,
           days_since_evolution: daysSinceEvolution,
           pbo_score: pboScore,
           status_color: statusColor,
