@@ -1,0 +1,30 @@
+transaction_costs:
+  etf_bps: 3              # ETF 万分之三佣金（含规费、过户费），盘中买卖有价差，建议 2-5 bps
+  etf_min_yuan: 5         # 单笔最低佣金 5 元（默认不免5）；若券商免5可改为 0
+  mmf_bps: 0              # 货币基金（511360/511880）约 0 成本，申赎无佣金
+
+regime:
+  lookback_months: 3      # 滚动特征窗口（月），用于计算 3M 收益/波动
+  n_states: 3             # 固定 3 状态：牛市/震荡/熊市
+  scaler: "standard"      # 必须 StandardScaler，否则波动率数值远大于收益率导致只按波动分类
+  hysteresis_months: 1    # 状态平滑窗口（月），防止频繁跳变
+
+synthetic:
+  n_paths_per_scenario: 5000  # 各压力场景生成路径数（可改，大=更稳更慢）
+  scenarios:
+    - "fat_tails"         # 尾部肥厚：t分布 df=3
+    - "regime_shift"      # 突变：均值/方差突变
+    - "corr_breakdown"    # 相关性崩塌：相关性→1
+
+drift:
+  window_months: 12       # 实盘漂移检测窗口：近 12 月 vs 全回测分布
+  psi_threshold: 0.25     # PSI 告警阈值（>0.25 显著分布漂移）
+  ks_threshold: 0.05      # KS-test p值阈值（<0.05 拒绝同分布假设）
+
+sobol:
+  n_samples: 2048         # Saltelli 采样基数（总评估 ≈ 2*(D+2)*N，D=参数维度）
+
+bootstrap:
+  n_resamples: 1000       # 块 bootstrap 重采样次数
+  block_size: 5           # 块长度（天），保留短期自相关
+  ci_levels: [0.95, 0.99] # 双阈值：95% 常规，99% 尾部风险预警
