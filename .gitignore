@@ -36,6 +36,12 @@ npm-debug.log*
 *.sqlite-shm
 *.sqlite-wal
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
 # Data
 data/market_data/*.csv
 data/market_data/*.py
