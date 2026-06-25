@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { useAuth } from '../hooks/useAuth';
-import { usePortfolio } from '../hooks/usePortfolio';
-import TriggerProgress from '../components/TriggerProgress';
-import StrategyEvolutionBar from '../components/StrategyEvolutionBar';
-import TransactionForm from '../components/TransactionForm';
+
 import PositionsList from '../components/PositionsList';
 import RecentTransactions from '../components/RecentTransactions';
+import StrategyEvolutionBar from '../components/StrategyEvolutionBar';
+import TransactionForm from '../components/TransactionForm';
+import TriggerProgress from '../components/TriggerProgress';
+import { useAuth } from '../hooks/useAuth';
+import { usePortfolio } from '../hooks/usePortfolio';
 
 export default function Dashboard() {
   const { user, logout } = useAuth();
@@ -96,15 +97,15 @@ export default function Dashboard() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="card">
                 <p className="text-sm text-gray-500 mb-1">总资产</p>
-                <p className="text-2xl font-bold text-gray-900">¥{portfolio?.total_balance?.toFixed(2) || '0.00'}</p>
+                <p className="text-2xl font-bold text-gray-900">¥{portfolio?.total_balance.toFixed(2) ?? '0.00'}</p>
               </div>
               <div className="card">
                 <p className="text-sm text-gray-500 mb-1">安全层</p>
-                <p className="text-2xl font-bold text-success-600">¥{portfolio?.safe_layer_balance?.toFixed(2) || '0.00'}</p>
+                <p className="text-2xl font-bold text-success-600">¥{portfolio?.safe_layer_balance.toFixed(2) ?? '0.00'}</p>
               </div>
               <div className="card">
                 <p className="text-sm text-gray-500 mb-1">进取层</p>
-                <p className="text-2xl font-bold text-primary-600">¥{portfolio?.ambition_layer_balance?.toFixed(2) || '0.00'}</p>
+                <p className="text-2xl font-bold text-primary-600">¥{portfolio?.ambition_layer_balance.toFixed(2) ?? '0.00'}</p>
               </div>
             </div>
             <PositionsList positions={dashboard.positions} />

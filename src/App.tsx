@@ -1,7 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+
 import { useAuth } from './hooks/useAuth';
-import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import Login from './pages/Login';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();

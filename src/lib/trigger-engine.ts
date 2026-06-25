@@ -1,8 +1,10 @@
-import {
+import type {
   TriggerInput,
   TriggerResponse,
   TriggerDecision,
-  SignalType,
+  SignalType} from '../types/api';
+
+import {
   TRIGGER_CONSTANTS,
 } from '../types/api';
 

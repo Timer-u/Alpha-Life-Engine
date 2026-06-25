@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+
 import { useAuth } from '../hooks/useAuth';
 
 export default function Login() {
@@ -12,7 +13,7 @@ export default function Login() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      navigate('/', { replace: true });
+      void navigate('/', { replace: true });
     }
   }, [isAuthenticated, navigate]);
 
@@ -43,7 +44,7 @@ export default function Login() {
     if (!otp.trim() || otp.length !== 6) return;
     try {
       await verifyOtp({ email: email.trim(), otp: otp.trim() });
-      navigate('/', { replace: true });
+      void navigate('/', { replace: true });
     } catch {
       // verifyOtpError 已在 UI 中通过 useAuth 显示
     }
