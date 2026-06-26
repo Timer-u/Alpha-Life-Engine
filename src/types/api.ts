@@ -132,6 +132,43 @@ export interface StrategyReport {
   created_at: string;
 }
 
+export interface AllocationWeight {
+  symbol: string;
+  weight: number;
+}
+
+export interface EvolvedParams {
+  trigger_line?: number;
+  safe_ratio?: number;
+  ambition_ratio?: number;
+  bsm_threshold?: number;
+  ma_short_window?: number;
+  ma_long_window?: number;
+  safe_allocation?: AllocationWeight[];
+  ambition_allocation?: AllocationWeight[];
+  evolution_timestamp?: string;
+  pbo_score?: number | null;
+  dsr_ranking?: number | null;
+  source: 'evolved';
+}
+
+export interface LCHAllocation {
+  safe_ratio: number;
+  ambition_ratio: number;
+  source: 'lch';
+  age: number;
+}
+
+export type ActiveAllocation = EvolvedParams | LCHAllocation;
+
+export function isEvolvedParams(a: ActiveAllocation): a is EvolvedParams {
+  return a.source === 'evolved';
+}
+
+export function isLCHAllocation(a: ActiveAllocation): a is LCHAllocation {
+  return a.source === 'lch';
+}
+
 export interface SystemConfig {
   trigger_line: number;
   commission_rate: number;
