@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.42.3",
+    "@cloudflare/workers-types": "^4.20260626.1",
     "@eslint-react/eslint-plugin": "^5.9.3",
     "@eslint/js": "^10.0.0",
     "@tailwindcss/postcss": "^4.3.1",
