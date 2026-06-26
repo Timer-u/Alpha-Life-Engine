@@ -4,14 +4,46 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 
 import { sessionMiddleware } from './auth';
+import { resolveActiveParams } from './lch-utils';
 
 const strategyRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+import type { ActiveAllocation } from '../../src/types/api';
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
+interface StrategyResponseMeta {
+  fallback: string;
+  pbo_score: number | null;
+}
+
+interface StrategyResponse {
+  success: true;
+  data: ActiveAllocation | null;
+  meta?: StrategyResponseMeta;
+}
+
 strategyRouter.use('*', sessionMiddleware);
+
+// GET /api/strategy/latest-params
+strategyRouter.get('/latest-params', async (c) => {
+  try {
+    const userId = c.get('userId');
+    const { allocation, pboRejected, pboScore } = await resolveActiveParams(c.env.DB, userId);
+
+    const response: StrategyResponse = { success: true, data: allocation };
+    if (pboRejected) {
+      response.meta = { fallback: 'pbo_rejected', pbo_score: pboScore ?? null };
+    }
+
+    return c.json(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ success: false, error: 'Failed', message }, 500);
+  }
+});
 
 const reportSchema = z.object({
   report_data: z.string().min(1).max(5242880),

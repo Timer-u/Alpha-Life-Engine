@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { triggerEngine } from '../../src/lib/trigger-engine';
 
 import { sessionMiddleware } from './auth';
+import { resolveActiveParams } from './lch-utils';
 
 const triggerRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -60,10 +61,10 @@ triggerRouter.post('/', async (c) => {
       return c.json({ success: false, error: 'Validation failed', message: validation.errors.join(', ') }, 400);
     }
 
-    // 从 MarketData 表获取实时价格
+    const { allocation: activeParams } = await resolveActiveParams(c.env.DB, userId);
     const marketPrices = await fetchLatestPrices(c.env.DB);
 
-    const response = triggerEngine.makeTriggerDecision(input, marketPrices);
+    const response = triggerEngine.makeTriggerDecision(input, marketPrices, activeParams);
 
     await c.env.DB.prepare(
       'INSERT INTO trigger_log (user_id, balance, trigger_decision, signal_value, executed_amount, commission, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
