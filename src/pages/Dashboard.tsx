@@ -49,6 +49,7 @@ export default function Dashboard() {
             </div>
             <div className="flex items-center gap-4">
               <span className="text-sm text-gray-500 hidden sm:inline">{user?.email}</span>
+              <a href="/settings" className="text-sm text-gray-400 hover:text-gray-600">设置</a>
               <button onClick={() => logout()} className="text-sm text-gray-500 hover:text-gray-700">
                 退出登录
               </button>

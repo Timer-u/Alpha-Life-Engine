@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './hooks/useAuth';
 import Dashboard from './pages/Dashboard';
 import Login from './pages/Login';
+import Settings from './pages/Settings';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -25,6 +26,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/" element={<AuthGuard><Dashboard /></AuthGuard>} />
+        <Route path="/settings" element={<AuthGuard><Settings /></AuthGuard>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
