@@ -30,14 +30,15 @@ export async function sessionMiddleware(c: Context<{ Bindings: Env; Variables: V
   }>();
 
   if (session.results.length === 0) {
-    c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
+    c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict');
     return c.json({ success: false, error: 'Unauthorized', message: '会话已过期' }, 401);
   }
 
   const row = session.results[0];
   c.set('userId', row.user_id);
 
-  c.env.DB.prepare('UPDATE sessions SET last_active = ? WHERE id = ?').bind(now, row.id).run().catch(() => {});
+  const updatePromise = c.env.DB.prepare('UPDATE sessions SET last_active = ? WHERE id = ?').bind(now, row.id).run().catch((err) => { console.error('Failed to update last_active:', err); });
+  c.executionCtx.waitUntil(updatePromise);
 
   await next();
 }
@@ -70,15 +71,31 @@ interface UserRow {
   updated_at: string;
 }
 
-interface SessionRow {
-  id: number;
-  token: string;
-  user_id: number;
-  created_at: string;
-  expires_at: string;
-  last_active: string;
-  email: string;
-  name: string | null;
+async function getUserFromSession(c: Context<{ Bindings: Env }>, now: string) {
+  const cookie = c.req.header('cookie') ?? '';
+  const match = cookie.match(/session_token=([^;\s]+)/);
+  if (!match) return null;
+
+  const session = await c.env.DB.prepare(
+    'SELECT s.*, u.email, u.name, u.preferences FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND s.expires_at > ? LIMIT 1'
+  ).bind(match[1], now).all<{
+    id: number;
+    token: string;
+    user_id: number;
+    created_at: string;
+    expires_at: string;
+    last_active: string;
+    email: string;
+    name: string | null;
+    preferences: string | null;
+  }>();
+
+  if (session.results.length === 0) return null;
+
+  const row = session.results[0];
+  const updatePromise = c.env.DB.prepare('UPDATE sessions SET last_active = ? WHERE id = ?').bind(now, row.id).run().catch((err) => { console.error('Failed to update last_active:', err); });
+  c.executionCtx.waitUntil(updatePromise);
+  return row;
 }
 
 function generateOtp(): string {
@@ -194,7 +211,7 @@ authRouter.post('/otp/verify', async (c) => {
     ).bind(token, user.id, now, expiresAt, now).run();
 
     const isSecure = c.env.ENVIRONMENT === 'production';
-    c.header('Set-Cookie', `session_token=${token}; HttpOnly; Path=/; Max-Age=${sessionDays * 86400}; ${isSecure ? 'Secure; ' : ''}SameSite=Lax`);
+    c.header('Set-Cookie', `session_token=${token}; HttpOnly; Path=/; Max-Age=${sessionDays * 86400}; ${isSecure ? 'Secure; ' : ''}SameSite=Strict`);
 
     return c.json({
       success: true,
@@ -212,35 +229,99 @@ authRouter.post('/logout', async (c) => {
   if (match) {
     await c.env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(match[1]).run();
   }
-  c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
+  c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict');
   return c.json({ success: true, data: { message: '已退出登录' } });
 });
 
 // GET /api/auth/me
 authRouter.get('/me', async (c) => {
-  const cookie = c.req.header('cookie') ?? '';
-  const match = cookie.match(/session_token=([^;\s]+)/);
-  if (!match) {
-    return c.json({ success: false, error: 'Unauthorized' }, 401);
-  }
-
   const now = nowIso();
-  const session = await c.env.DB.prepare(
-    'SELECT s.*, u.email, u.name FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND s.expires_at > ? LIMIT 1'
-  ).bind(match[1], now).all<SessionRow>();
-
-  if (!session.results.length) {
-    c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
+  const row = await getUserFromSession(c, now);
+  if (!row) {
+    c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict');
     return c.json({ success: false, error: 'Session expired' }, 401);
   }
-
-  const row = session.results[0];
-  await c.env.DB.prepare('UPDATE sessions SET last_active = ? WHERE id = ?').bind(now, row.id).run();
 
   return c.json({
     success: true,
     data: { user: { id: row.user_id, email: row.email, name: row.name } },
   });
+});
+
+function parsePreferences(preferences: string | null): Record<string, unknown> {
+  if (!preferences) return {};
+  try {
+    const parsed = JSON.parse(preferences);
+    return typeof parsed === 'object' && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// GET /api/auth/profile
+authRouter.get('/profile', async (c) => {
+  try {
+    const now = nowIso();
+    const row = await getUserFromSession(c, now);
+    if (!row) {
+      c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict');
+      return c.json({ success: false, error: 'Session expired' }, 401);
+    }
+
+    const prefs = parsePreferences(row.preferences);
+
+    return c.json({ success: true, data: { id: row.user_id, email: row.email, name: row.name, preferences: prefs }, timestamp: now });
+  } catch (error) {
+    return c.json({ success: false, error: 'Failed', message: (error as Error).message }, 500);
+  }
+});
+
+// PUT /api/auth/profile
+authRouter.put('/profile', async (c) => {
+  try {
+    const now = nowIso();
+    const row = await getUserFromSession(c, now);
+    if (!row) {
+      c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict');
+      return c.json({ success: false, error: 'Unauthorized', message: '会话已过期' }, 401);
+    }
+
+    const currentYear = new Date().getFullYear();
+    const body = await c.req.json();
+    const parsed = z.object({
+      birth_year: z.number().int().min(1900).max(currentYear),
+      birth_month: z.number().int().min(1).max(12).optional(),
+      birth_day: z.number().int().min(1).max(31).optional(),
+    }).superRefine((data, ctx) => {
+      if (data.birth_month !== undefined && data.birth_day !== undefined) {
+        const d = new Date(data.birth_year, data.birth_month - 1, data.birth_day);
+        if (d.getMonth() !== data.birth_month - 1) {
+          ctx.addIssue({ code: 'custom', message: '无效的日期' });
+        }
+      }
+    }).safeParse(body);
+
+    if (!parsed.success) {
+      return c.json({
+        success: false, error: '验证失败',
+        message: parsed.error.issues.map((e: { message: string }) => e.message).join(', '),
+      }, 400);
+    }
+
+    const { birth_year, birth_month, birth_day } = parsed.data;
+    const prefs = parsePreferences(row.preferences);
+    prefs.birth_year = birth_year;
+    if (birth_month !== undefined) prefs.birth_month = birth_month;
+    if (birth_day !== undefined) prefs.birth_day = birth_day;
+
+    await c.env.DB.prepare(
+      'UPDATE users SET preferences = ?, updated_at = ? WHERE id = ?'
+    ).bind(JSON.stringify(prefs), now, row.user_id).run();
+
+    return c.json({ success: true, data: { birth_year, birth_month, birth_day }, timestamp: now });
+  } catch (error) {
+    return c.json({ success: false, error: 'Failed', message: (error as Error).message }, 500);
+  }
 });
 
 export { authRouter };
