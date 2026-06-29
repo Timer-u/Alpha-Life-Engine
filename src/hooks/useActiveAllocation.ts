@@ -28,7 +28,7 @@ export function useActiveAllocation(lastEvolution: string | null): {
         if (json.success && json.data && typeof json.data === 'object') {
           const d = json.data as Record<string, unknown>;
           if (typeof d.source === 'string' && typeof d.safe_ratio === 'number' && typeof d.ambition_ratio === 'number') {
-            setActiveAllocation(d as ActiveAllocation);
+            setActiveAllocation(d as unknown as ActiveAllocation);
             setError(null);
           } else {
             setError('Invalid allocation data');
