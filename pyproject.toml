@@ -1,0 +1,297 @@
+# ============================================================================
+# Alpha-Life Engine — Python Toolchain Configuration
+# (Ruff, mypy, Bandit, pytest, build)
+# ============================================================================
+# 所有 Python 代码质量工具统一配置在此文件。目标：长期可维护性。
+# 所有规则默认全开（select = ["ALL"]），按需在每个文件/目录级别豁免。
+# ============================================================================
+
+# ============================================================================
+# Python Packaging
+# ============================================================================
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpha-life-evolver"
+version = "0.1.0"
+description = "Alpha-Life Engine — Quantitative Strategy Evolver"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.12,<3",
+    "numpy>=1.26,<2",
+    "pandas>=2.2,<3",
+    "requests>=2.33,<3",
+    "click>=8.1,<9",
+    "scikit-learn>=1.6,<2",
+    "pyyaml>=6.0,<7",
+    "scipy>=1.14,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9",
+    "ruff>=0.11,<1",
+    "mypy>=1.15,<2",
+    "bandit>=1.8,<3",
+    "types-PyYAML>=6.0",
+    "types-requests>=2.32",
+    "pre-commit>=4.0,<5",
+]
+
+
+# ============================================================================
+# pytest — Testing Framework
+# ============================================================================
+[tool.pytest.ini_options]
+testpaths = ["scripts/local_evolver/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+# ── 覆盖率 ──
+[tool.coverage.run]
+source = ["scripts/local_evolver"]
+omit = ["scripts/local_evolver/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "except Exception:",
+    "    raise AssertionError",
+]
+
+
+# ============================================================================
+# Ruff — Linter + Formatter (严格模式)
+# ============================================================================
+# 策略：select = ["ALL"]（包含所有现有及未来规则），
+# 通过 ignore + per-file-ignores 按需放宽。
+# 这样可以自动捕获新发布的 Ruff 规则。
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # ── 由 ruff format 全权处理，lint 不重复 ──
+    "E501",           # 行长度 — ruff format 已强制执行 88 列
+    "COM",            # 逗号风格 — ruff format 的 magic-trailing-comma 已处理
+
+    # ── 中文文档必然存在的 Unicode 标点，非歧义 ──
+    "RUF002",         # docstring 中的全角括号、冒号 — 中文技术文档标准
+    "RUF003",         # 注释中的全角标点 — 同上
+
+    # ── 文档字符串格式（30 年策略：用 Review 确保质量，而非靠自动化强制） ──
+    "D",              # pydocstyle 全部规则 — 中文 docstring 无法匹配 numpy/reST 约定
+
+    # ── 不适用于本项目的框架规则 ──
+    "AIR",    "DJ",   # Airflow / Django — 本项目未使用
+    "INT",            # gettext 国际化 — 本项目无 i18n 需求
+    "PYI",            # .pyi 存根文件 — 本项目不生成存根
+    "CPY",            # 版权声明头 — 本项目使用 git 追踪版权
+    "T10",            # flake8-debugger — 不使用 pdb，调试依赖日志
+
+    # ── 科学计算特有的规则冲突 ──
+    # 以下规则适用于通用业务代码，但与科学/量化计算代码冲突严重：
+    "PLR2004",        # 魔法数字 — 科学常数（0.5772=Euler, 1e-15=epsilon, 2/3/4/5/10=最小观测值）命名化反而降低可读性
+    "PLR0913",        # 参数过多 — 科学函数签名常需 6-10 个参数（数据、配置、开关等），拆分无益
+]
+
+# ── per-file-ignores：按目录和文件精确豁免 ──
+[tool.ruff.lint.per-file-ignores]
+
+# ========================
+# 测试文件（所有测试目录）
+# ========================
+"scripts/local_evolver/tests/*" = [
+    "S101",           # assert — 测试的唯一断言方式
+    "PLR2004",        # 魔法数字 — 测试 fixture 直接写数字比命名常量更清晰
+    "ANN",            # 类型标注 — pytest fixture 动态注入，标注成本高而收益有限
+    "D",              # 文档字符串 — 测试函数名即文档
+    "S311",           # 伪随机数 — 测试用固定种子，非加密场景
+    "SLF001",         # 访问私有成员 — 白盒测试需要校验内部状态
+    "ARG001",         # 未使用参数 — pytest fixture 有时仅用于副作用注册
+    "TCH",            # TYPE_CHECKING 导入 — 测试文件不需要优化
+    "PT009",          # 允许普通 assert 替代 unittest.TestCase.assert*
+    "PT011",          # 异常类型判断可宽松
+    "PT018",          # 允许复合 assert
+    "NPY002",         # legacy numpy random — 保持与项目现有风格一致
+    "E402",           # 模块级 docstring 在 imports 前的位置问题
+]
+
+# ========================
+# 主代码（演化器核心）
+# ========================
+"scripts/local_evolver/*.py" = [
+    "ANN",            # 类型标注 — 核心代码逐步添加，采取渐进式策略
+    "D",              # 文档字符串 — 中文注释优先，格式自由
+    "S311",           # random — 参数搜索使用标准 random，非加密场景
+    "NPY002",         # 遗留 numpy random — bootstrap 模块使用
+    "TCH002",         # 第三方导入放 TYPE_CHECKING — 科学计算模块惰性导入
+    "TCH003",         # 同上
+    "ARG001",         # 未使用参数 — 接口签名需要保留（用户 ID、回调等）
+    "F841",           # 未使用变量 — 用于类型推导或占位
+    "RET504",         # return 前多余赋值 — 科学计算中保留中间变量便于调试和推导
+]
+
+# ========================
+# 数据下载脚本
+# ========================
+"data/**" = [
+    "S",              # 安全扫描 — API 调用需要一定灵活性
+    "ANN",            # 类型标注 — 下载脚本暂不要求完整标注
+    "D",              # 文档字符串
+]
+
+# ========================
+# 科学计算：数学变量命名豁免（N806 大写变量 / N803 大写参数）
+# sob = Sobol indices (Sa, Sb, SA, SB 等标准命名)
+# ========================
+"scripts/local_evolver/sensitivity.py" = [
+    "N806",           # A, B, YA, YB — Sensobol 标准命名
+    "N803",           # 函数参数中的数学符号
+]
+"scripts/local_evolver/dsr.py" = [
+    "N806",           # E_max, heuristic_var — 数学/统计学标准命名
+]
+"scripts/local_evolver/monte_carlo.py" = [
+    "N806",           # L — Cholesky 分解结果
+]
+"scripts/local_evolver/mpt.py" = [
+    "N806",           # R — 收益率矩阵，N — 资产数量
+    "PLC0415",        # 懒导入 models — 避免 EvolverConfig 循环导入
+]
+"scripts/local_evolver/synthetic.py" = [
+    "N806",           # L, L_early, L_break — Cholesky 因子
+    "PLC0415",        # 懒导入 monte_carlo — 避免循环依赖
+]
+"scripts/local_evolver/tests/test_sensitivity.py" = [
+    "N803",           # X — 测试中与实现代码保持一致
+]
+"scripts/local_evolver/tests/test_mpt.py" = [
+    "RUF059",         # 未使用解包变量 — 保持接口签名完整性
+]
+"scripts/local_evolver/tests/test_monte_carlo.py" = [
+    "N806",           # L — Cholesky 因子，测试中保持与实现一致
+]
+
+# ========================
+# 各模块的特殊豁免
+# ========================
+"scripts/local_evolver/regime.py" = [
+    "E741",           # 变量 l — 列表推导临时变量，含义清晰
+    "B905",           # zip 无 strict — len(probs) == len(covs) 有隐含保证
+]
+
+# report.py 使用降级容错模式：可选分析模块（regime/monte-carlo/sobol/drift）
+# 通过 try-except + 懒导入实现，单个分析模块失败不影响整体报告。
+# 注意：S110（bare except: pass）和 BLE001（捕获 Exception）已在代码中用
+# inline noqa 标注，此处不设全面豁免以确保未来新增的 except 被审查。
+"scripts/local_evolver/report.py" = [
+    "C901",           # 函数过于复杂 — generate_report 包含多种可选分析模块的编排
+    "PLR0912",        # 分支过多 — 每个可选模块是一组 if/try 分支
+    "PLR0915",        # 语句过多 — 同上，模块化编排需要
+    "PLC0415",        # 懒导入 — 可选模块延迟加载，避免启动时导入所有依赖
+    "PTH",            # 使用 os.path — Sobol 部分使用 _os 别名避免命名冲突
+    "LOG015",         # 根 logger — except 块内临时导入 logging 用于降级记录
+    "N803",           # X — Sobol 函数使用 X 作为输入矩阵，数学标准命名
+]
+"scripts/local_evolver/stability.py" = [
+    "RUF046",         # int(round(x)) — 浮点运算后确保整数截断正确
+    "PLR0915",        # 函数体较长 — check_stability 包含多个对称的上下扰动分支
+]
+"scripts/local_evolver/evolver.py" = [
+    "T201",           # print — CLI 入口需要输出进度信息
+    "G004",           # logging 中的 f-string — CLI 日志需要
+    "PLR0915",        # 函数体较长 — CLI main() 包含完整流程，拆分反而降低可读性
+]
+"scripts/local_evolver/walk_forward.py" = [
+    "PLR0913",        # 参数超过 5 个 — 科学函数签名参数多
+]
+"scripts/local_evolver/risk.py" = [
+    "PLR0913",        # 同上
+]
+
+# ========================
+# Ruff 格式化选项
+# ========================
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+# 开启尾逗号 — git diff 更清晰，新增参数不修改上一行
+# preview 模式启用 trailing-comma 等相关功能
+preview = true
+
+
+# ============================================================================
+# mypy — Static Type Checker (strict mode)
+# ============================================================================
+# 策略：启用 strict = true 获得完整类型安全性，
+# 按模块逐步收紧（scripts/local_evolver 现在已是有效包名 local_evolver）
+# 模块覆盖路径匹配 glob：scripts/local_evolver/* → 实际包名模式
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+# ── 输出格式 ──
+show_error_codes = true          # 显示错误码便于针对性修复
+show_column_numbers = true       # 显示列号
+
+# ── 模块级覆盖 ──
+# 说明：numpy/pandas/torch/scipy 等科学计算库不提供完整 stub，
+# 因此对导入这些库的模块启用 ignore_missing_imports。
+# 当官方或第三方 stubs（如 pandas-stubs）成熟后，可逐个移除。
+
+[[tool.mypy.overrides]]
+# 核心代码 — 渐进式类型（旧代码逐步添加标注）
+module = ["scripts.local_evolver.*"]
+ignore_missing_imports = true    # numpy/pandas/torch/scipy 等无 stub
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+disallow_untyped_decorators = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+# 数据下载脚本
+module = ["data.*"]
+ignore_missing_imports = true    # baostock 等无 stub
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+disallow_untyped_decorators = false
+disallow_any_generics = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+# 测试文件
+module = ["scripts.local_evolver.tests.*"]
+ignore_missing_imports = true    # pytest 动态注入，numpy 无 stub
+disallow_untyped_defs = false
+disallow_any_generics = false
+disallow_untyped_calls = false
+disallow_untyped_decorators = false
+warn_return_any = false
+
+
+# ============================================================================
+# Bandit — Security Linter
+# ============================================================================
+[tool.bandit]
+targets = ["scripts/local_evolver/", "data/"]
+exclude = ["tests/", ".git/", "node_modules/", "__pycache__/"]
+skips = ["B101", "B102", "B110", "B311"]
+#   B101: assert — 用于类型守卫和测试
+#   B102: exec — 不存在 exec 调用
+#   B311: random — 参数搜索使用标准 random，不涉及安全场景
+#   B110: try-except-pass — 在某些降级场景中合理

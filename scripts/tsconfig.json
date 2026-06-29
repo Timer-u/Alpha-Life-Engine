@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "preserve",
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["local_evolver/**"]
+}

@@ -41,6 +41,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+*.egg-info/
 
 # Data
 data/market_data/*.csv

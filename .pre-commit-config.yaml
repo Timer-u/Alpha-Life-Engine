@@ -1,0 +1,42 @@
+# ============================================================================
+# Alpha-Life Engine — pre-commit hooks
+# ============================================================================
+# 策略：所有 Python 检查与 CI 保持完全一致，本地拦截问题比 CI 更快。
+# 注意：TypeScript 检查（ESLint + tsc）不在 pre-commit 中运行，
+#       因为它们需要 Node 依赖且运行时间长，统一在 CI 中验证。
+# ============================================================================
+
+repos:
+  # ── Ruff: Python linter + formatter ─────────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.10
+    hooks:
+      - id: ruff
+        name: ruff check
+        args: [--fix]
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format
+        types_or: [python, pyi]
+
+  # ── mypy: Static type checker (文件级增量检查) ──────────────────────────
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        name: mypy typecheck
+        args: [--strict, --no-site-packages]
+        additional_dependencies:
+          - types-PyYAML
+          - types-requests
+        files: "^scripts/local_evolver/.*\\.py$|^data/.*\\.py$"
+        language: python
+
+  # ── Bandit: Security scanner ────────────────────────────────────────────
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.3
+    hooks:
+      - id: bandit
+        name: bandit security
+        args: [-r, scripts/local_evolver/, data/, -c, pyproject.toml]
+        pass_filenames: false
