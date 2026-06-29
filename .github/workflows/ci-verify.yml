@@ -1,12 +1,23 @@
 name: CI — Verify Dependency Updates
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/local_evolver/**/*.py"
+      - "data/**/*.py"
+      - "pyproject.toml"
+      - "scripts/local_evolver/requirements.txt"
   pull_request:
     paths:
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/*.yml"
       - ".github/dependabot.yml"
+      - "scripts/local_evolver/**/*.py"
+      - "data/**/*.py"
+      - "pyproject.toml"
+      - "scripts/local_evolver/requirements.txt"
   workflow_dispatch:
 
 permissions:
@@ -14,7 +25,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  verify:
+  verify-ts:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -54,3 +65,33 @@ jobs:
             dist/
             *.log
           retention-days: 3
+
+  verify-python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Python lint (ruff)
+        run: ruff check scripts/local_evolver/ data/
+
+      - name: Python format check (ruff)
+        run: ruff format --check scripts/local_evolver/ data/
+
+      - name: Python typecheck (mypy)
+        run: mypy --strict --no-site-packages scripts/local_evolver/ data/
+
+      - name: Python security (bandit)
+        run: bandit -r scripts/local_evolver/ data/ -c pyproject.toml
