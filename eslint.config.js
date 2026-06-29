@@ -15,8 +15,7 @@ export default tseslint.config(
       ".wrangler/**",
       "_worker.js",
       "worker-configuration.d.ts",
-      "scripts/local-evolver/**",
-      "eslint.config.js",
+      "scripts/local_evolver/**",
       "vite.config.ts",
       "postcss.config.js",
       "tailwind.config.js",
@@ -68,7 +67,7 @@ export default tseslint.config(
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
 
-      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-floating-promises": ["error", { ignoreVoid: true }],
       "@typescript-eslint/no-misused-promises": [
         "error",
         { checksVoidReturn: { attributes: false } },
@@ -86,7 +85,7 @@ export default tseslint.config(
       ],
 
       "perfectionist/sort-imports": [
-        "warn",
+        "error",
         {
           type: "natural",
           order: "asc",
