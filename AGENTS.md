@@ -1,61 +1,91 @@
-# Alpha-Life Engine Agent Guide
+# Alpha-Life Engine
 
-## Development Commands
-- **Start Backend**: `npm run backend:dev` (Cloudflare Workers on :8787)
-- **Start Frontend**: `npm run dev` (Vite on :3000)
-- **Database Migration**:
-  - Local: `npm run database:migrate`
-  - Production: `npm run database:migrate:prod`
-- **Market Data**:
-  - Init (full history): `npm run market:init`
-  - Daily Update: `npm run market:update`
-  - Prod Update: `npm run market:update:prod`
-- **Strategy Evolver**: `npm run evolve` (Python scripts in `scripts/local-evolver/`)
-- **Build & Verify** (run in order):
-  1. `npm run types` (TypeScript type check)
-  2. `npm run lint` (ESLint – zero warnings required)
-  3. `npm run build` (Vite build)
-- **Deployment**: `npm run pages:deploy` (requires `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`)
+Personal quantitative DCA system with dual-layer accounts (safe + ambition), 1667 yuan trigger line, and a Python strategy evolver.
 
-## Critical Setup
-- **Env Files**: Create `.dev.vars` with `RESEND_API_KEY` for real OTP emails; without it, OTP logs to `wrangler dev` console.
-- **Whitelist**: First login requires adding email:
-  `wrangler d1 execute alpha-life-dev --command="INSERT OR IGNORE INTO email_whitelist (email, notes) VALUES ('your@email.com', 'notes');" --local`
-- **D1 Databases**: Dev uses `alpha-life-dev` (ID a491d7ba-...), prod uses `alpha-life-prod` (ID c79c0075-...).
-- **Python Deps**: `pip install baostock pandas` (for market data) + `pip install -r scripts/local-evolver/requirements.txt` (for strategy evolver).
+## Dev Servers
+
+| Command | What | Port |
+|---|---|---|
+| `npm run backend:dev` | Cloudflare Workers (Hono API) | `:8787` |
+| `npm run dev` | Vite frontend (React 19) | `:3000` |
+
+`wrangler pages dev` is an alternative backend start (used by `scripts/start-dev.bat`) — both work.
+
+## Database
+
+- **Schema**: `database/schema.sql` — D1 (SQLite on Cloudflare)
+- **Migrate**: `npm run database:migrate` (local), `npm run database:migrate:prod` (prod)
+- **Import market SQL**: `npm run database:import-market` (local), `npm run database:import-market:prod` (prod)
+- Dev DB: `alpha-life-dev`, Prod DB: `alpha-life-prod` (IDs in `wrangler.toml`)
+
+## Market Data Pipeline
+
+| Command | What |
+|---|---|
+| `npm run market:init` | Full history download + schema migrate |
+| `npm run market:update` | Incremental update (last 10 days, local D1) |
+| `npm run market:update:prod` | Incremental update, prod D1 (`--prod` flag) |
+| `npm run market:init:prod` | Full init for production |
+
+Scripts in `scripts/` — TypeScript via `tsx`, fetches from BaoStock (free Chinese A-share data).
+
+## Strategy Evolver
+
+- **Entry**: `npm run evolve` → `python scripts/local_evolver/evolver.py`
+- **Config**: `scripts/local_evolver/config.yaml`
+- **Constants**: `scripts/local_evolver/constants.py` (all magic numbers centralized)
+- **Python deps**: `pip install -e ".[dev]"` (installs from `pyproject.toml` — single source of truth)
+
+## TS Verification (order matters, CI matches)
+
+```
+npm run types    # tsc --noEmit (strict mode, noEmit in tsconfig)
+npm run lint     # eslint . --max-warnings 0
+npm run build    # tsc && vite build (types + Vite build)
+```
+
+Note: `build` already runs `tsc`, so `types` is technically redundant but CI runs both.
+
+## Python Verification
+
+```
+ruff check scripts/local_evolver/ data/           # lint (ALL rules, zero warns)
+ruff format --check scripts/local_evolver/ data/   # format check
+mypy --strict --no-site-packages scripts/local_evolver/ data/  # typecheck
+bandit -r scripts/local_evolver/ data/ -c pyproject.toml       # security
+```
+
+Shortcut: `npm run lint:python:all`
+
+Python tests: `pytest` (configured in `pyproject.toml`, tests at `scripts/local_evolver/tests/`)
+
+Pre-commit: Python only (`ruff`, `mypy`, `bandit`). TS checks are CI-only (no pre-commit hook).
 
 ## Architecture
-- **Frontend**: `src/` (React 19, React Router 7, Vite, React Query, ECharts, Tailwind 4, shadcn/ui)
-- **Backend**: `functions/api/` (Hono on Cloudflare Workers) – routes: `/api/*`
-- **Storage**: Cloudflare D1 (SQLite) – tables:
-  - Auth: `users`, `sessions`, `otps`, `email_whitelist`
-  - Portfolio: `portfolio`, `positions`, `transactions`
-  - Market: `market_data`, `trigger_log`
-  - Strategy: `strategy_reports`
-  - System: `reconciliations`, `config`
-- **Data Pipeline**: `scripts/` (TS/Python) → BaoStock → D1
-  - `bao-stock-setup.ts`: full history download + SQL generation
-  - `daily-market-update.ts`: incremental update (last 10 days)
-- **Trigger Logic**: `src/lib/trigger-engine.ts` (1667 yuan trigger line)
 
-## Verification Order (CI matches local)
-1. `npm run types` (typecheck)
-2. `npm run lint` (lint – must have zero warnings)
-3. `npm run build` (Vite build)
-4. Manual: open `http://localhost:3000`
+- **Frontend**: `src/` — React 19, React Router 7, Vite 8, TanStack React Query, ECharts 6, Tailwind 4
+- **Backend**: `functions/api/[[route]].ts` — Hono on Cloudflare Workers, route file exports `onRequest = app.fetch`
+- **Auth**: OTP via email (Resend), `session_token` HttpOnly cookie, 7-day expiry. Without `RESEND_API_KEY`, OTP logs to `wrangler dev` console.
+- **Email whitelist**: First login requires `INSERT INTO email_whitelist ...`
+- **D1 binding**: `DB` in `wrangler.toml`, typed via `wrangler types` → `worker-configuration.d.ts`
+- **Vite proxy**: `/api` → `http://localhost:8787` (see `vite.config.ts`)
+- **Path alias**: `@/*` → `./src/*` (tsconfig + vite)
+- **Trigger engine**: `src/lib/trigger-engine.ts` — 1667 yuan default trigger line, BSM/DOUBLE/NORMAL/SKIP signal types
+- **LCH allocation**: `src/lib/lch-constants.ts` — age-based safe/ambition ratio (AMBITION_MIN=0.20, AMBIATION_MAX=0.85)
 
-## Key Files
-- `wrangler.toml` – Workers config (D1 bindings, env vars, routes)
-- `tsconfig.json` – strict mode, `noEmit`, path aliases (`@/*`)
-- `eslint.config.js` – type-aware rules, perfectionist import sorting, `@typescript-eslint/no-explicit-any: error`
-- `vite.config.ts` – Vite + Cloudflare Workers plugin
-- `database/schema.sql` – full D1 schema (run via `database:migrate`)
-- `scripts/local-evolver/config.yaml` – evolver parameters (costs, regimes, synthetic scenarios, drift detection, Sobol/bootstrap)
+## ESLint Quirks
 
-## Common Gotchas
-- **Vite proxy**: Frontend proxies `/api` → `http://localhost:8787` (see `vite.config.ts`)
-- **Cookie auth**: `session_token` HttpOnly cookie, 7-day expiry
-- **BaoStock**: Free Chinese A-share data source; first full download takes 10-30 min
-- **D1 local vs remote**: `--local` flag for dev, `--remote` for prod (handled by npm scripts)
-- **Python execution**: Scripts try `python` then `python3`; ensure one works
-- **Lint ignores**: `scripts/local-evolver/**`, `dist/**`, config files excluded from ESLint
+- `@typescript-eslint/no-explicit-any: error`, `consistent-type-imports: error`, `perfectionist/sort-imports` (natural asc, type-first groups)
+- `no-console: warn` (only `warn`, `error` allowed) — except `scripts/**` and `database/**` (unrestricted)
+- Ignores: `dist/`, `.wrangler/`, `_worker.js`, `worker-configuration.d.ts`, `scripts/local_evolver/`, `vite.config.ts`, `postcss.config.js`, `tailwind.config.js`
+- `--max-warnings 0` enforced
+
+## Gotchas
+
+- `npm run build` = `tsc && vite build` — types check then build; `build.sourcemap: true`
+- `allowScripts` in package.json: esbuild, sharp, workerd need explicit permission
+- BaoStock first download takes 5–15 min
+- Python scripts try `python` then `python3`
+- `scripts/local_evolver/` directory name uses underscore (not hyphen as in README)
+- TypeScript 6.x (latest), `types: ["node"]` in tsconfig
+- `wrangler types` regenerates `worker-configuration.d.ts`
