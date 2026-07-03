@@ -27,7 +27,7 @@
     "lint:python:fix": "ruff check --fix scripts/local_evolver/ data/",
     "format:python": "ruff format --check scripts/local_evolver/ data/",
     "format:python:fix": "ruff format scripts/local_evolver/ data/",
-    "typecheck:python": "mypy --strict --no-site-packages scripts/local_evolver/ data/",
+    "typecheck:python": "mypy --strict scripts/local_evolver/ data/",
     "security:python": "bandit -r scripts/local_evolver/ data/ -c pyproject.toml",
     "lint:python:all": "npm run lint:python && npm run format:python && npm run typecheck:python && npm run security:python",
     "evolve": "python scripts/local_evolver/evolver.py"

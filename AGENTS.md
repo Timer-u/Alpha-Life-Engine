@@ -51,7 +51,7 @@ Note: `build` already runs `tsc`, so `types` is technically redundant but CI run
 ```
 ruff check scripts/local_evolver/ data/           # lint (ALL rules, zero warns)
 ruff format --check scripts/local_evolver/ data/   # format check
-mypy --strict --no-site-packages scripts/local_evolver/ data/  # typecheck
+mypy --strict scripts/local_evolver/ data/  # typecheck
 bandit -r scripts/local_evolver/ data/ -c pyproject.toml       # security
 ```
 
