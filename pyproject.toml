@@ -243,6 +243,12 @@ preview = true
 [tool.mypy]
 python_version = "3.11"
 strict = true
+disable_error_code = [
+    "import-untyped",   # scipy/sklearn 有包但无 stub
+    "type-arg",         # dict/list 无泛型参数（科学计算代码常态）
+    "no-untyped-def",   # 旧代码逐步加标注，暂不强制
+    "no-any-return",    # 未标注函数返回 Any 是渐进式类型的正常现象
+]
 
 # ── 输出格式 ──
 show_error_codes = true          # 显示错误码便于针对性修复

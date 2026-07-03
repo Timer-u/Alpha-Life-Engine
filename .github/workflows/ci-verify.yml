@@ -91,7 +91,7 @@ jobs:
         run: ruff format --check scripts/local_evolver/ data/
 
       - name: Python typecheck (mypy)
-        run: mypy --strict scripts/local_evolver/ data/
+        run: MYPYPATH=scripts/local_evolver mypy --strict --explicit-package-bases scripts/local_evolver/ data/
 
       - name: Python security (bandit)
         run: bandit -r scripts/local_evolver/ data/ -c pyproject.toml
