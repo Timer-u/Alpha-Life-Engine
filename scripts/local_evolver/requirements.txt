@@ -1,5 +1,5 @@
 # === Runtime ===
-torch==2.12.1
+torch==2.13.0
 numpy==1.26.4
 pandas==2.2.3
 requests==2.33.0
