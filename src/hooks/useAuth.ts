@@ -1,7 +1,9 @@
-import type { ApiResponse, AuthSession } from '../types/api';
+import type { AuthSession } from '../types/api';
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
+
+import { isApiResponse } from '../types/api';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -81,15 +83,6 @@ async function verifyOtp({ email, otp }: { email: string; otp: string }): Promis
 
 async function logout(): Promise<void> {
   await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', credentials: 'include' });
-}
-
-function isApiResponse(obj: unknown): obj is ApiResponse<unknown> {
-  return (
-    obj !== null &&
-    typeof obj === 'object' &&
-    'success' in obj &&
-    typeof (obj as Record<string, unknown>).success === 'boolean'
-  );
 }
 
 export function useAuth() {

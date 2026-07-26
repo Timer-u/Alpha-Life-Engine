@@ -4,6 +4,8 @@ import type { Context, Next } from 'hono';
 import { Hono } from 'hono';
 import { z } from 'zod';
 
+import { emailShell, sendEmail } from './email';
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -121,24 +123,13 @@ async function sendOtpEmail(email: string, code: string, apiKey: string): Promis
     console.warn('[DEV] OTP:', code);
     return;
   }
-  await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      from: 'no-reply@alpha-life.yourdomain.com',
-      to: email,
-      subject: '您的 Alpha-Life 登录验证码',
-      html: `<div style="font-family:system-ui;max-width:480px;margin:0 auto;padding:24px;">
-        <h2 style="color:#1d4ed8;">Alpha-Life Engine</h2>
-        <p>您的验证码：</p>
-        <div style="font-size:32px;font-weight:bold;text-align:center;padding:16px;background:#eff6ff;border-radius:6px;color:#1d4ed8;">${code}</div>
-        <p style="color:#6b7280;font-size:14px;">10分钟内有效</p>
-      </div>`,
-    }),
-  });
+  const sent = await sendEmail(apiKey, email, '您的 Alpha-Life 登录验证码', emailShell('您的登录验证码', `
+    <div style="font-size:32px;font-weight:bold;text-align:center;padding:16px;background:#eff6ff;border-radius:6px;color:#1d4ed8;">${code}</div>
+    <p style="color:#6b7280;font-size:14px;">10分钟内有效</p>
+  `));
+  if (!sent) {
+    throw new Error('验证码邮件发送失败，请稍后重试');
+  }
 }
 
 // POST /api/auth/otp/request

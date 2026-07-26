@@ -145,6 +145,41 @@ Update portfolio balance fields.
 
 Allowed fields: `total_balance`, `safe_layer_balance`, `ambition_layer_balance`
 
+### POST /api/portfolio/deposit
+
+Recharge the fund pool. The amount is automatically split into safe/ambition layers using the active allocation (evolved strategy params, or LCH age-based fallback).
+
+**Request:** `{ "amount": 2000 }`
+
+**Response:** `200`
+```json
+{
+  "data": {
+    "amount": 2000,
+    "safe_added": 1200.00,
+    "ambition_added": 800.00,
+    "safe_ratio": 0.6,
+    "ambition_ratio": 0.4,
+    "allocation_source": "lch",
+    "portfolio": { "total_balance": 2000.00, "safe_layer_balance": 1200.00, "ambition_layer_balance": 800.00 }
+  }
+}
+```
+
+### GET /api/portfolio/layer-performance
+
+Daily cumulative-return series per layer, built by replaying transactions against `market_data` closes.
+
+**Response:** `200`
+```json
+{
+  "data": {
+    "safe": [{ "date": "2026-01-05", "market_value": 1010.00, "invested": 1005.00, "cumulative_gain": 5.00 }],
+    "ambition": [...]
+  }
+}
+```
+
 ---
 
 ## Transactions
@@ -155,7 +190,10 @@ List transactions (most recent first).
 
 ### POST /api/transactions
 
-Create a new transaction record. Updates portfolio balance automatically on buy.
+Create a new transaction record. Atomically updates positions and the fund pool:
+
+- **buy** — rejects with `400` if the layer's cash balance is insufficient; deducts `amount + commission` from the layer, upserts the position (weighted-average cost)
+- **sell** — rejects with `400` if held shares are insufficient; credits `amount - commission` back to the layer, reduces/removes the position
 
 **Request:**
 ```json
@@ -201,7 +239,9 @@ Execute trigger decision engine.
 }
 ```
 
-`sinal_type` enum: `BSM`, `DOUBLE`, `NORMAL`, `SKIP`
+`signal_type` enum: `BSM`, `DOUBLE`, `NORMAL`, `SKIP`
+
+On `EXECUTE` decisions an execution-suggestion email is sent asynchronously (Resend; logged to console when `RESEND_API_KEY` is unset).
 
 **Response:** `200`
 ```json
@@ -234,7 +274,11 @@ Get full historical OHLCV data for all tracked symbols.
 
 ## Strategy
 
-### PATCH /api/strategy/report
+### GET /api/strategy/latest-params
+
+Get the active allocation parameters: latest evolved report (if PBO <= 0.5), otherwise the LCH age-based fallback. When the fallback is caused by PBO rejection, `meta.fallback = "pbo_rejected"` is included.
+
+### POST /api/strategy/reports
 
 Push strategy evolution report from local evolver.
 
@@ -245,6 +289,53 @@ Push strategy evolution report from local evolver.
   "pbo_score": 0.35,
   "dsr_ranking": 0.82,
   "parameter_count": 12,
+  "evolution_timestamp": "2026-01-01T00:00:00.000Z",
   "next_scheduled_evolution": "2026-02-01T00:00:00.000Z"
 }
 ```
+
+---
+
+## Reconciliation
+
+### GET /api/reconciliation
+
+List reconciliation records (most recent 24 months).
+
+### POST /api/reconciliation
+
+Monthly reconciliation: compare broker-reported total assets against the system view (fund pool cash + holdings valued at latest closes). Variance <= 1% auto-confirms; > 1% is stored as `PENDING` awaiting calibration. Upserts by `(user, month)`.
+
+**Request:**
+```json
+{
+  "reconciliation_date": "2026-07",
+  "broker_balance": 12345.67,
+  "deposits": 2000,
+  "withdrawals": 0,
+  "fees": 5,
+  "notes": "optional"
+}
+```
+
+**Response:** `200`
+```json
+{
+  "data": {
+    "reconciliation": { "id": 1, "status": "PENDING", "variance": -250.00, ... },
+    "comparison": {
+      "system_cash": 5000.00,
+      "system_holdings_value": 7595.67,
+      "system_total": 12595.67,
+      "broker_balance": 12345.67,
+      "variance": -250.00,
+      "variance_pct": 1.98,
+      "needs_calibration": true
+    }
+  }
+}
+```
+
+### POST /api/reconciliation/:id/calibrate
+
+One-click calibration for a `PENDING` record: sets fund-pool cash to `broker_balance - holdings_value` (floored at 0), re-splits layer cash proportionally (LCH/evolved ratios when the pool was empty), and marks the record `CONFIRMED`.

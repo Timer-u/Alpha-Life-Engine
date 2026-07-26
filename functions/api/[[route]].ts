@@ -4,6 +4,7 @@ import { cors } from 'hono/cors'
 import { authRouter } from './auth'
 import { marketDataRouter } from './market-data'
 import { portfolioRouter } from './portfolio'
+import { reconciliationRouter } from './reconciliation'
 import { strategyRouter } from './strategy'
 import { transactionRouter } from './transaction'
 import { triggerRouter } from './trigger'
@@ -58,6 +59,7 @@ app.route('/transactions', transactionRouter)
 app.route('/trigger', triggerRouter)
 app.route('/strategy', strategyRouter)
 app.route('/market-data', marketDataRouter)
+app.route('/reconciliation', reconciliationRouter)
 
 app.notFound((c) => {
   return c.json(

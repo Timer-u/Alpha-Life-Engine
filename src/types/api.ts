@@ -44,17 +44,6 @@ export const ETF_CONSTANTS = {
 } as const;
 
 // Database Entity Types
-export interface User {
-  id: number;
-  email: string;
-  name: string | null;
-  avatar_url: string | null;
-  phone: string | null;
-  preferences: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface Portfolio {
   id: number;
   user_id: number;
@@ -108,30 +97,6 @@ export interface TransactionForm {
   notes?: string;
 }
 
-export interface MarketData {
-  id: number;
-  symbol: string;
-  date: string;
-  open: number | null;
-  high: number | null;
-  low: number | null;
-  close: number | null;
-  volume: number | null;
-  created_at: string;
-}
-
-export interface StrategyReport {
-  id: number;
-  user_id: number;
-  report_data: string;
-  pbo_score: number | null;
-  dsr_ranking: number | null;
-  parameter_count: number;
-  evolution_timestamp: string;
-  next_scheduled_evolution: string | null;
-  created_at: string;
-}
-
 export interface AllocationWeight {
   symbol: string;
   weight: number;
@@ -165,19 +130,59 @@ export function isEvolvedParams(a: ActiveAllocation): a is EvolvedParams {
   return a.source === 'evolved';
 }
 
-export function isLCHAllocation(a: ActiveAllocation): a is LCHAllocation {
-  return a.source === 'lch';
+export type ReconciliationStatus = 'PENDING' | 'CONFIRMED' | 'ARCHIVED';
+
+export interface Reconciliation {
+  id: number;
+  user_id: number;
+  reconciliation_date: string;
+  beginning_balance: number;
+  deposits: number;
+  withdrawals: number;
+  gains: number;
+  fees: number;
+  ending_balance: number;
+  variance: number;
+  notes: string | null;
+  status: ReconciliationStatus;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface SystemConfig {
-  trigger_line: number;
-  commission_rate: number;
-  commission_min: number;
-  safe_layer_primary: string;
-  safe_layer_backup: string;
-  safe_layer_name_primary: string;
-  safe_layer_name_backup: string;
-  ambition_layer_name: string;
+export interface ReconciliationComparison {
+  system_cash: number;
+  system_holdings_value: number;
+  system_total: number;
+  broker_balance: number;
+  variance: number;
+  variance_pct: number;
+  needs_calibration: boolean;
+}
+
+export interface DepositResult {
+  amount: number;
+  safe_added: number;
+  ambition_added: number;
+  safe_ratio: number;
+  ambition_ratio: number;
+  allocation_source: 'evolved' | 'lch';
+  portfolio: {
+    total_balance: number;
+    safe_layer_balance: number;
+    ambition_layer_balance: number;
+  };
+}
+
+export interface PerformancePoint {
+  date: string;
+  market_value: number;
+  invested: number;
+  cumulative_gain: number;
+}
+
+export interface LayerPerformance {
+  safe: PerformancePoint[];
+  ambition: PerformancePoint[];
 }
 
 // API Response Types
@@ -216,25 +221,6 @@ export interface AuthSession {
     name: string | null;
   };
   expires_at: string;
-}
-
-export interface MarketPriceData {
-  [symbol: string]: number;
-}
-
-// Frontend UI Types
-export interface EvolutionStatus {
-  lastEvolution: string | null;
-  daysSince: number;
-  pboScore: number | null;
-  status: 'green' | 'yellow' | 'red';
-}
-
-export interface TriggerProgress {
-  currentBalance: number;
-  triggerLine: number;
-  percentage: number;
-  status: 'accumulating' | 'triggerable';
 }
 
 // Type guard for API responses

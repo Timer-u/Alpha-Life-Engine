@@ -153,6 +153,14 @@ CREATE TABLE IF NOT EXISTS otps (
   expires_at DATETIME NOT NULL
 );
 
+-- 通知发送记录表（策略过期/执行建议邮件去重）
+CREATE TABLE IF NOT EXISTS notification_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  notification_type TEXT NOT NULL,
+  sent_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Insert initial configuration values
 INSERT OR IGNORE INTO config (key, value, description) VALUES
 ('trigger_line', '1667', '1667 yuan trigger line'),
@@ -177,3 +185,5 @@ CREATE INDEX IF NOT EXISTS idx_strategy_reports_user_id ON strategy_reports(user
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_otps_email ON otps(email);
 CREATE INDEX IF NOT EXISTS idx_email_whitelist_email ON email_whitelist(email);
+CREATE INDEX IF NOT EXISTS idx_reconciliations_user_date ON reconciliations(user_id, reconciliation_date);
+CREATE INDEX IF NOT EXISTS idx_notification_log_user_type ON notification_log(user_id, notification_type, sent_at);

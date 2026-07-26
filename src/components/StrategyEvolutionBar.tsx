@@ -12,7 +12,7 @@ interface Props {
 
 const STATUS_CONFIG = {
   green: { bg: 'bg-success-50', border: 'border-success-200', text: 'text-success-700', dot: 'bg-success-500', label: '正常' },
-  yellow: { bg: 'bg-warning-50', border: 'bg-warning-200', text: 'text-warning-700', dot: 'bg-warning-500', label: '注意' },
+  yellow: { bg: 'bg-warning-50', border: 'border-warning-200', text: 'text-warning-700', dot: 'bg-warning-500', label: '注意' },
   red: { bg: 'bg-danger-50', border: 'border-danger-200', text: 'text-danger-700', dot: 'bg-danger-500', label: '警告' },
 } as const;
 

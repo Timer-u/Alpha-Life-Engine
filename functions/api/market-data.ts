@@ -3,10 +3,9 @@ import type { Env, Variables } from './[[route]]';
 import { Hono } from 'hono';
 
 import { sessionMiddleware } from './auth';
+import { TRACKED_SYMBOLS } from './symbols';
 
 const marketDataRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
-
-const TRACKED_SYMBOLS = ['511360', '511880', '000300', '000905', '000922'];
 
 marketDataRouter.use('*', sessionMiddleware);
 

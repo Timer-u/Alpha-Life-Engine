@@ -3,11 +3,31 @@ import type { TransactionType, LayerType } from '../types/api';
 import { useState, useCallback } from 'react';
 
 import { usePortfolio } from '../hooks/usePortfolio';
+import { useToast } from '../hooks/useToast';
+
+import SellConfirmModal from './SellConfirmModal';
 
 interface Props { onSuccess: () => void; }
 
+const LAYER_SYMBOLS: Record<LayerType, Array<{ value: string; label: string }>> = {
+  safe: [
+    { value: '511360', label: '511360 海富通短融ETF' },
+    { value: '511880', label: '511880 银华日利' },
+  ],
+  ambition: [
+    { value: '000300', label: '000300 沪深300' },
+    { value: '000905', label: '000905 中证500' },
+    { value: '000922', label: '000922 中证红利' },
+  ],
+};
+
+function generateConfirmCode(): string {
+  return `CONFIRM_SELL-${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
 export default function TransactionForm({ onSuccess }: Props) {
   const { createTransaction, isCreating, calculateCommission } = usePortfolio();
+  const { toast } = useToast();
   const [symbol, setSymbol] = useState('511360');
   const [shares, setShares] = useState('');
   const [price, setPrice] = useState('');
@@ -16,8 +36,14 @@ export default function TransactionForm({ onSuccess }: Props) {
   const [layer, setLayer] = useState<LayerType>('safe');
   const [notes, setNotes] = useState('');
   const [error, setError] = useState('');
+  const [sellConfirmCode, setSellConfirmCode] = useState<string | null>(null);
 
   const amount = parseFloat(shares) * parseFloat(price) || 0;
+
+  const handleLayerChange = (next: LayerType) => {
+    setLayer(next);
+    setSymbol(LAYER_SYMBOLS[next][0].value);
+  };
 
   const handleCalculateCommission = useCallback(async () => {
     if (amount > 0) {
@@ -30,8 +56,7 @@ export default function TransactionForm({ onSuccess }: Props) {
     }
   }, [amount, calculateCommission]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const doSubmit = async () => {
     setError('');
     const formCommission = commission ? parseFloat(commission) : Math.max(amount * 0.0003, 5);
 
@@ -42,10 +67,25 @@ export default function TransactionForm({ onSuccess }: Props) {
         notes: notes || undefined,
       });
       setShares(''); setPrice(''); setCommission(''); setNotes(''); setError('');
+      setSellConfirmCode(null);
+      toast('success', transactionType === 'buy' ? '买入交易已记录' : '卖出交易已记录');
       onSuccess();
     } catch (err) {
-      setError((err as Error).message);
+      setSellConfirmCode(null);
+      const message = (err as Error).message;
+      setError(message);
+      toast('error', message);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (transactionType === 'sell') {
+      // 卖出摩擦：先弹出随机确认串弹窗，确认后才真正提交
+      setSellConfirmCode(generateConfirmCode());
+      return;
+    }
+    await doSubmit();
   };
 
   return (
@@ -63,7 +103,7 @@ export default function TransactionForm({ onSuccess }: Props) {
           </div>
           <div>
             <label className="label">层级</label>
-            <select value={layer} onChange={(e) => setLayer(e.target.value as LayerType)} className="input">
+            <select value={layer} onChange={(e) => handleLayerChange(e.target.value as LayerType)} className="input">
               <option value="safe">安全层</option>
               <option value="ambition">进取层</option>
             </select>
@@ -72,8 +112,9 @@ export default function TransactionForm({ onSuccess }: Props) {
         <div>
           <label className="label">股票代码</label>
           <select value={symbol} onChange={(e) => setSymbol(e.target.value)} className="input">
-            <option value="511360">511360 海富通短融ETF</option>
-            <option value="511880">511880 银华日利</option>
+            {LAYER_SYMBOLS[layer].map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
           </select>
         </div>
         <div className="grid grid-cols-2 gap-4">
@@ -104,11 +145,24 @@ export default function TransactionForm({ onSuccess }: Props) {
         </div>
         <div className="pt-2">
           <p className="text-sm text-gray-600 mb-3">金额: ¥{amount.toFixed(2)} · 佣金: ¥{commission ? parseFloat(commission).toFixed(2) : '0.00'}</p>
-          <button type="submit" disabled={isCreating} className="btn-primary w-full disabled:opacity-50">
-            {isCreating ? '提交中...' : '提交交易'}
+          <button type="submit" disabled={isCreating}
+            className={`w-full disabled:opacity-50 ${transactionType === 'sell' ? 'btn-danger' : 'btn-primary'}`}>
+            {isCreating ? '提交中...' : transactionType === 'sell' ? '卖出（需二次确认）' : '提交交易'}
           </button>
         </div>
       </form>
+
+      {sellConfirmCode !== null && (
+        <SellConfirmModal
+          confirmCode={sellConfirmCode}
+          symbol={symbol}
+          shares={parseFloat(shares) || 0}
+          amount={amount}
+          submitting={isCreating}
+          onConfirm={doSubmit}
+          onCancel={() => setSellConfirmCode(null)}
+        />
+      )}
     </div>
   );
 }

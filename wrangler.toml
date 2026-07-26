@@ -5,6 +5,10 @@ compatibility_flags = ["nodejs_compat"]
 
 vars = { ENVIRONMENT = "development", LOG_LEVEL = "debug", SESSION_DAYS = "7" }
 
+# 每日 01:00 UTC（北京时间 09:00）检查策略演化器是否过期并发送提醒邮件
+[triggers]
+crons = ["0 1 * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "alpha-life-dev"
@@ -25,6 +29,9 @@ routes = [
   { pattern = "alpha-life.yourdomain.com/*", zone_name = "yourdomain.com" }
 ]
 vars = { ENVIRONMENT = "production", LOG_LEVEL = "info", SESSION_DAYS = "7" }
+
+[env.production.triggers]
+crons = ["0 1 * * *"]
 
 [[env.production.d1_databases]]
 binding = "DB"

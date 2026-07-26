@@ -8,11 +8,11 @@ import { z } from 'zod';
 import { triggerEngine } from '../../src/lib/trigger-engine';
 
 import { sessionMiddleware } from './auth';
+import { executionSuggestionEmailHtml, logNotification, sendEmail } from './email';
 import { resolveActiveParams } from './lch-utils';
+import { SAFE_SYMBOLS, symbolName, TRACKED_SYMBOLS } from './symbols';
 
 const triggerRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
-
-const TRACKED_SYMBOLS = ['511360', '511880', '000300', '000905', '000922'];
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -71,6 +71,30 @@ triggerRouter.post('/', async (c) => {
     ).bind(userId, input.current_balance, response.decision, input.signal_value,
       response.executed_amount ?? 0, response.commission, nowIso()).run();
 
+    // EXECUTE 决策异步发送执行建议邮件（不阻塞响应）
+    if (response.decision === 'EXECUTE') {
+      const user = await c.env.DB.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first<{ email: string }>();
+      if (user) {
+        const emailPromise = sendEmail(
+          c.env.RESEND_API_KEY,
+          user.email,
+          '执行建议：触发线已达成',
+          executionSuggestionEmailHtml({
+            executedAmount: response.executed_amount ?? 0,
+            safeAmount: response.layer_allocation.safe_amount,
+            ambitionAmount: response.layer_allocation.ambition_amount,
+            commission: response.commission,
+            nextSafeEtf: response.next_safe_etf,
+            nextSafeEtfName: symbolName(response.next_safe_etf),
+            message: response.message,
+          })
+        ).then(async (sent) => {
+          if (sent) await logNotification(c.env.DB, userId, 'execution_suggestion');
+        }).catch((err: unknown) => { console.error('Failed to send execution email:', err); });
+        c.executionCtx.waitUntil(emailPromise);
+      }
+    }
+
     return c.json({ success: true, data: response, message: response.message, timestamp: nowIso() });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -83,22 +107,13 @@ triggerRouter.get('/market-prices', async (c) => {
   try {
     const prices = await fetchLatestPrices(c.env.DB);
 
-    // 附加每个 symbol 的 ETF 名称信息
-    const symbolNames: Record<string, string> = {
-      '511360': '海富通短融ETF',
-      '511880': '银华日利',
-      '000300': '沪深300 (指数)',
-      '000905': '中证500 (指数)',
-      '000922': '中证红利 (指数)',
-    };
-
     const data = {
       prices,
       symbols: TRACKED_SYMBOLS.map(symbol => ({
         symbol,
-        name: symbolNames[symbol] || symbol,
+        name: symbolName(symbol),
         price: prices[symbol] ?? null,
-        layer: ['511360', '511880'].includes(symbol) ? 'safe' as const : 'ambition' as const,
+        layer: SAFE_SYMBOLS.includes(symbol) ? 'safe' as const : 'ambition' as const,
       })),
       last_update: nowIso(),
     };
@@ -110,5 +125,5 @@ triggerRouter.get('/market-prices', async (c) => {
   }
 });
 
-export { triggerRouter, fetchLatestPrices };
+export { triggerRouter };
 

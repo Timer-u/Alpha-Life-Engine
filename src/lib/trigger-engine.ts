@@ -4,6 +4,7 @@ import {
   type TriggerDecision,
   type TriggerInput,
   type TriggerResponse,
+  ETF_CONSTANTS,
   TRIGGER_CONSTANTS,
   isEvolvedParams,
 } from '../types/api';
@@ -29,7 +30,7 @@ export class TriggerDecisionEngine {
   }
 
   private getNextSafeETF(): '511360' | '511880' {
-    return '511360';
+    return ETF_CONSTANTS.SAFE_PRIMARY;
   }
 
   /**
@@ -136,30 +137,6 @@ export class TriggerDecisionEngine {
       valid: errors.length === 0,
       errors,
     };
-  }
-
-  /**
-   * Logs a trigger decision for audit/debugging purposes.
-   * Outputs user_id, balance, decision, signal_value, executed_amount,
-   * commission, and timestamp to the console.
-   */
-  public logTriggerDecision(
-    user_id: number,
-    balance: number,
-    decision: TriggerDecision,
-    signal_value: number,
-    executed_amount: number,
-    commission: number
-  ): void {
-    console.warn(`[Trigger] Decision:`, {
-      user_id,
-      balance,
-      decision,
-      signal_value,
-      executed_amount,
-      commission,
-      created_at: new Date().toISOString(),
-    });
   }
 }
 
