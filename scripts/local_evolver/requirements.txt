@@ -11,7 +11,7 @@ scipy==1.18.0
 # === Dev / Quality ===
 pytest>=9.1.1,<10
 ruff>=0.16.0,<1
-mypy>=1.15,<2
+mypy>=2.3.0,<3
 bandit>=1.8,<3
 types-PyYAML>=6.0.12.20260724
 types-requests>=2.32
