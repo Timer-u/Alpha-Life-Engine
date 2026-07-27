@@ -1,6 +1,6 @@
 # === Runtime ===
 torch==2.13.0
-numpy==1.26.4
+numpy==2.5.1
 pandas==3.0.5
 requests==2.34.2
 click==8.4.2
