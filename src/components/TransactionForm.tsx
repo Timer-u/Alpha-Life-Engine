@@ -1,6 +1,7 @@
-import type { TransactionType, LayerType } from '../types/api';
+import type { LayerType, TransactionType } from '../types/api';
 
-import { useState, useCallback } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { useCallback, useState } from 'react';
 
 import { usePortfolio } from '../hooks/usePortfolio';
 import { useToast } from '../hooks/useToast';
@@ -29,12 +30,13 @@ const LAYER_SYMBOLS: Record<LayerType, Array<{ value: string; label: string }>> 
  * 真正的权限控制由后端 sessionMiddleware + 金额/持仓校验负责。
  */
 function generateConfirmCode(): string {
-  return `CONFIRM_SELL-${Math.floor(1000 + Math.random() * 9000)}`;
+  return 'CONFIRM_SELL-' + Math.floor(1000 + Math.random() * 9000);
 }
 
 export default function TransactionForm({ onSuccess }: Props) {
   const { createTransaction, isCreating, calculateCommission } = usePortfolio();
   const { toast } = useToast();
+  const shouldReduceMotion = useReducedMotion() ?? false;
   const [symbol, setSymbol] = useState('511360');
   const [shares, setShares] = useState('');
   const [price, setPrice] = useState('');
@@ -46,6 +48,7 @@ export default function TransactionForm({ onSuccess }: Props) {
   const [sellConfirmCode, setSellConfirmCode] = useState<string | null>(null);
 
   const amount = parseFloat(shares) * parseFloat(price) || 0;
+  const submitClassName = 'w-full disabled:opacity-50 ' + (transactionType === 'sell' ? 'btn-danger' : 'btn-primary');
 
   const handleLayerChange = (next: LayerType) => {
     setLayer(next);
@@ -96,9 +99,26 @@ export default function TransactionForm({ onSuccess }: Props) {
   };
 
   return (
-    <div className="card">
+    <motion.div
+      className="card"
+      initial={{ opacity: 0, y: shouldReduceMotion ? 0 : 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: shouldReduceMotion ? 0 : 0.3, delay: shouldReduceMotion ? 0 : 0.06 }}
+      whileHover={shouldReduceMotion ? undefined : { y: -2 }}
+    >
       <h3 className="text-lg font-semibold text-gray-900 mb-4">记录交易</h3>
-      {error && <div className="mb-4 p-3 bg-danger-50 text-danger-600 text-sm rounded-lg">{error}</div>}
+      <AnimatePresence initial={false}>
+        {error && (
+          <motion.div
+            key="error"
+            className="mb-4 p-3 bg-danger-50 text-danger-600 text-sm rounded-lg"
+            initial={{ opacity: 0, height: 0, y: shouldReduceMotion ? 0 : -4 }}
+            animate={{ opacity: 1, height: 'auto', y: 0 }}
+            exit={{ opacity: 0, height: 0, y: shouldReduceMotion ? 0 : -4 }}
+            transition={{ duration: shouldReduceMotion ? 0 : 0.2 }}
+          >{error}</motion.div>
+        )}
+      </AnimatePresence>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -140,9 +160,15 @@ export default function TransactionForm({ onSuccess }: Props) {
           <label className="label">佣金 (必填)</label>
           <div className="flex gap-2">
             <input type="number" value={commission} onChange={(e) => setCommission(e.target.value)}
-              placeholder={`max(${amount.toFixed(2)} × 0.03%, 5)`} step="0.01" min="0"
+              placeholder={'max(' + amount.toFixed(2) + ' × 0.03%, 5)'} step="0.01" min="0"
               className="input flex-1" required />
-            <button type="button" onClick={handleCalculateCommission} className="btn-secondary whitespace-nowrap">自动计算</button>
+            <motion.button
+              type="button"
+              onClick={handleCalculateCommission}
+              className="btn-secondary whitespace-nowrap"
+              whileHover={shouldReduceMotion ? undefined : { y: -1 }}
+              whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
+            >自动计算</motion.button>
           </div>
           <p className="mt-1 text-xs text-gray-500">公式: max(金额 × 0.03%, 5元)</p>
         </div>
@@ -151,25 +177,34 @@ export default function TransactionForm({ onSuccess }: Props) {
           <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="可选" className="input" />
         </div>
         <div className="pt-2">
-          <p className="text-sm text-gray-600 mb-3">金额: ¥{amount.toFixed(2)} · 佣金: ¥{commission ? parseFloat(commission).toFixed(2) : '0.00'}</p>
-          <button type="submit" disabled={isCreating}
-            className={`w-full disabled:opacity-50 ${transactionType === 'sell' ? 'btn-danger' : 'btn-primary'}`}>
+          <motion.p key={amount + ':' + commission} className="text-sm text-gray-600 mb-3" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+            金额: ¥{amount.toFixed(2)} · 佣金: ¥{commission ? parseFloat(commission).toFixed(2) : '0.00'}
+          </motion.p>
+          <motion.button
+            type="submit"
+            disabled={isCreating}
+            className={submitClassName}
+            whileHover={shouldReduceMotion ? undefined : { y: -1 }}
+            whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
+          >
             {isCreating ? '提交中...' : transactionType === 'sell' ? '卖出（需二次确认）' : '提交交易'}
-          </button>
+          </motion.button>
         </div>
       </form>
 
-      {sellConfirmCode !== null && (
-        <SellConfirmModal
-          confirmCode={sellConfirmCode}
-          symbol={symbol}
-          shares={parseFloat(shares) || 0}
-          amount={amount}
-          submitting={isCreating}
-          onConfirm={doSubmit}
-          onCancel={() => setSellConfirmCode(null)}
-        />
-      )}
-    </div>
+      <AnimatePresence initial={false}>
+        {sellConfirmCode !== null && (
+          <SellConfirmModal
+            confirmCode={sellConfirmCode}
+            symbol={symbol}
+            shares={parseFloat(shares) || 0}
+            amount={amount}
+            submitting={isCreating}
+            onConfirm={doSubmit}
+            onCancel={() => setSellConfirmCode(null)}
+          />
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }

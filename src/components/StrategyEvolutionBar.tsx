@@ -1,6 +1,9 @@
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import { useActiveAllocation } from '../hooks/useActiveAllocation';
+import { expandVariants } from '../lib/motion';
 import { isEvolvedParams } from '../types/api';
 
 interface Props {
@@ -31,25 +34,28 @@ function formatTimestamp(ts: string | undefined | null): string {
 export default function StrategyEvolutionBar({ lastEvolution, daysSince, pboScore, status }: Props) {
   const [expanded, setExpanded] = useState(false);
   const { activeAllocation, loading, error } = useActiveAllocation(lastEvolution);
+  const shouldReduceMotion = useReducedMotion() ?? false;
 
   const isEvolved = activeAllocation !== null && isEvolvedParams(activeAllocation);
   const evolvedAllocation = isEvolved ? activeAllocation : null;
-
   const config = STATUS_CONFIG[status];
+  const rootClassName = 'relative flex items-center gap-3 px-4 py-2 rounded-lg border ' + config.bg + ' ' + config.border;
+  const dotClassName = 'w-2 h-2 rounded-full ' + config.dot + (status === 'red' && !loading ? ' animate-pulse' : '');
+  const labelClassName = 'text-sm font-medium ' + config.text;
 
   const sourceBadge = () => {
     if (!activeAllocation) return null;
     if (activeAllocation.source === 'evolved') {
       return (
-        <span className="text-xs bg-primary-100 text-primary-700 px-2 py-0.5 rounded-full font-medium">
+        <motion.span layout className="text-xs bg-primary-100 text-primary-700 px-2 py-0.5 rounded-full font-medium">
           策略进化
-        </span>
+        </motion.span>
       );
     }
     return (
-      <span className="text-xs bg-warning-100 text-warning-700 px-2 py-0.5 rounded-full font-medium">
+      <motion.span layout className="text-xs bg-warning-100 text-warning-700 px-2 py-0.5 rounded-full font-medium">
         LCH分配 (年龄 {activeAllocation.age})
-      </span>
+      </motion.span>
     );
   };
 
@@ -61,10 +67,18 @@ export default function StrategyEvolutionBar({ lastEvolution, daysSince, pboScor
       <div className="flex items-center gap-2 mt-1">
         <span className="text-xs text-gray-500">分配:</span>
         <div className="flex-1 h-2 rounded-full bg-gray-200 overflow-hidden flex">
-          <div className="h-full rounded-full bg-success-500"
-            style={{ width: `${safePct}%` }} title={`安全层 ${safePct}%`} />
-          <div className="h-full rounded-full bg-primary-500"
-            style={{ width: `${ambitionPct}%` }} title={`进取层 ${ambitionPct}%`} />
+          <motion.div
+            className="h-full rounded-full bg-success-500"
+            animate={{ width: safePct + '%' }}
+            transition={{ duration: shouldReduceMotion ? 0 : 0.5 }}
+            title={'安全层 ' + safePct + '%'}
+          />
+          <motion.div
+            className="h-full rounded-full bg-primary-500"
+            animate={{ width: ambitionPct + '%' }}
+            transition={{ duration: shouldReduceMotion ? 0 : 0.5, delay: shouldReduceMotion ? 0 : 0.04 }}
+            title={'进取层 ' + ambitionPct + '%'}
+          />
         </div>
         <span className="text-xs font-mono text-success-600">{safePct}%</span>
         <span className="text-xs font-mono text-primary-600">{ambitionPct}%</span>
@@ -80,69 +94,87 @@ export default function StrategyEvolutionBar({ lastEvolution, daysSince, pboScor
       return (
         <>
           <span className="text-xs text-danger-600">{error}</span>
-          <a href="/settings" className="text-xs text-gray-400 hover:text-gray-600">设置</a>
+          <Link to="/settings" className="text-xs text-gray-400 hover:text-gray-600">设置</Link>
         </>
       );
     }
     return (
       <>
         {pboScore !== null && (
-          <span className={`text-xs font-mono ${pboScore > 0.5 ? 'text-danger-600 font-bold' : 'text-gray-500'}`}>
+          <span className={'text-xs font-mono ' + (pboScore > 0.5 ? 'text-danger-600 font-bold' : 'text-gray-500')}>
             PBO: {(pboScore * 100).toFixed(1)}%
           </span>
         )}
-        <button onClick={() => setExpanded(!expanded)}
-          className="text-xs text-primary-600 hover:text-primary-700 font-medium">
+        <motion.button
+          onClick={() => setExpanded(!expanded)}
+          className="text-xs text-primary-600 hover:text-primary-700 font-medium"
+          whileHover={shouldReduceMotion ? undefined : { y: -1 }}
+          whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
+          aria-expanded={expanded}
+        >
           {expanded ? '收起' : '详情'}
-        </button>
-        <a href="/settings" className="text-xs text-gray-400 hover:text-gray-600">设置</a>
+        </motion.button>
+        <Link to="/settings" className="text-xs text-gray-400 hover:text-gray-600">设置</Link>
       </>
     );
   };
 
   return (
-    <div className={`relative flex items-center gap-3 px-4 py-2 rounded-lg border ${config.bg} ${config.border}`}>
-      <div className={`w-2 h-2 rounded-full ${config.dot} ${status === 'red' && !loading ? 'animate-pulse' : ''}`} />
+    <motion.div layout className={rootClassName}>
+      <motion.div
+        className={dotClassName}
+        animate={status === 'red' && !loading && !shouldReduceMotion ? { scale: [1, 1.25, 1] } : undefined}
+        transition={status === 'red' && !loading && !shouldReduceMotion ? { duration: 1.6, repeat: Infinity } : undefined}
+      />
       <div className="flex-1 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <span className={`text-sm font-medium ${config.text}`}>策略进化状态: {config.label}</span>
+          <span className={labelClassName}>策略进化状态: {config.label}</span>
           <span className="text-xs text-gray-500">上次: {formatDate(lastEvolution)}</span>
-          <span className="text-xs text-gray-500">已过去: {daysSince === 999 ? 'N/A' : `${daysSince} 天`}</span>
+          <span className="text-xs text-gray-500">已过去: {daysSince === 999 ? 'N/A' : daysSince + ' 天'}</span>
           {!loading && !error && sourceBadge()}
         </div>
         <div className="flex items-center gap-3">
           {rightSlot()}
         </div>
       </div>
-      {!loading && !error && expanded && (
-        <div className="absolute top-full left-0 right-0 mt-1 z-10">
-          <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 mx-4">
-            {ratioBar()}
-            {evolvedAllocation && (
-              <>
-                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600">
-                  <span>触发线: <span className="font-mono">{evolvedAllocation.trigger_line ?? '—'}</span></span>
-                  <span>BSM阈值: <span className="font-mono">{evolvedAllocation.bsm_threshold ?? '—'}</span></span>
-                  <span>MA窗口: <span className="font-mono">{evolvedAllocation.ma_short_window ?? '—'}/{evolvedAllocation.ma_long_window ?? '—'}</span></span>
-                  <span>进化时间: <span className="font-mono">{formatTimestamp(evolvedAllocation.evolution_timestamp)}</span></span>
-                </div>
-                <div className="mt-2 text-xs text-gray-500">
-                  <span className="font-medium">安全层:</span>
-                  {(evolvedAllocation.safe_allocation ?? []).map(a => (
-                    <span key={a.symbol} className="ml-2">{a.symbol} {(a.weight * 100).toFixed(0)}%</span>
-                  ))}
-                </div>
-                <div className="text-xs text-gray-500">
-                  <span className="font-medium">进取层:</span>
-                  {(evolvedAllocation.ambition_allocation ?? []).map(a => (
-                    <span key={a.symbol} className="ml-2">{a.symbol} {(a.weight * 100).toFixed(0)}%</span>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+      <AnimatePresence initial={false}>
+        {!loading && !error && expanded && (
+          <motion.div
+            key="details"
+            className="absolute top-full left-0 right-0 mt-1 z-10 overflow-hidden"
+            variants={expandVariants(shouldReduceMotion)}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+          >
+            <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 mx-4">
+              {ratioBar()}
+              {evolvedAllocation && (
+                <>
+                  <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600">
+                    <span>触发线: <span className="font-mono">{evolvedAllocation.trigger_line ?? '—'}</span></span>
+                    <span>BSM阈值: <span className="font-mono">{evolvedAllocation.bsm_threshold ?? '—'}</span></span>
+                    <span>MA窗口: <span className="font-mono">{evolvedAllocation.ma_short_window ?? '—'}/{evolvedAllocation.ma_long_window ?? '—'}</span></span>
+                    <span>进化时间: <span className="font-mono">{formatTimestamp(evolvedAllocation.evolution_timestamp)}</span></span>
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    <span className="font-medium">安全层:</span>
+                    {(evolvedAllocation.safe_allocation ?? []).map(a => (
+                      <span key={a.symbol} className="ml-2">{a.symbol} {(a.weight * 100).toFixed(0)}%</span>
+                    ))}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    <span className="font-medium">进取层:</span>
+                    {(evolvedAllocation.ambition_allocation ?? []).map(a => (
+                      <span key={a.symbol} className="ml-2">{a.symbol} {(a.weight * 100).toFixed(0)}%</span>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }

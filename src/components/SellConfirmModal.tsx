@@ -1,4 +1,7 @@
+import { motion, useReducedMotion } from 'motion/react';
 import { useState } from 'react';
+
+import { modalBackdropVariants, modalPanelVariants } from '../lib/motion';
 
 interface Props {
   confirmCode: string;
@@ -16,17 +19,37 @@ interface Props {
  */
 export default function SellConfirmModal({ confirmCode, symbol, shares, amount, submitting, onConfirm, onCancel }: Props) {
   const [input, setInput] = useState('');
+  const shouldReduceMotion = useReducedMotion() ?? false;
   const matched = input.trim() === confirmCode;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
-      <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+    <motion.div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="sell-confirm-title"
+      variants={modalBackdropVariants(shouldReduceMotion)}
+      initial="initial"
+      animate="animate"
+      exit="exit"
+    >
+      <motion.div
+        className="bg-white rounded-xl shadow-xl max-w-md w-full p-6"
+        variants={modalPanelVariants(shouldReduceMotion)}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+      >
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-full bg-danger-50 flex items-center justify-center">
+          <motion.div
+            className="w-10 h-10 rounded-full bg-danger-50 flex items-center justify-center"
+            animate={shouldReduceMotion ? undefined : { scale: [1, 1.08, 1] }}
+            transition={shouldReduceMotion ? undefined : { duration: 1.4, repeat: Infinity }}
+          >
             <span className="text-danger-600 text-lg font-bold">!</span>
-          </div>
+          </motion.div>
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">确认卖出操作</h3>
+            <h3 id="sell-confirm-title" className="text-lg font-semibold text-gray-900">确认卖出操作</h3>
             <p className="text-xs text-gray-500">卖出摩擦机制：请谨慎操作</p>
           </div>
         </div>
@@ -62,19 +85,21 @@ export default function SellConfirmModal({ confirmCode, symbol, shares, amount, 
         />
 
         <div className="flex gap-3">
-          <button type="button" onClick={onCancel} className="btn-secondary flex-1">
+          <motion.button type="button" onClick={onCancel} className="btn-secondary flex-1" whileHover={shouldReduceMotion ? undefined : { y: -1 }} whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}>
             取消（推荐）
-          </button>
-          <button
+          </motion.button>
+          <motion.button
             type="button"
             onClick={onConfirm}
             disabled={!matched || submitting}
             className="btn-danger flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            whileHover={shouldReduceMotion ? undefined : { y: -1 }}
+            whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
           >
             {submitting ? '提交中...' : '确认卖出'}
-          </button>
+          </motion.button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
