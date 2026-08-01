@@ -21,6 +21,13 @@ const LAYER_SYMBOLS: Record<LayerType, Array<{ value: string; label: string }>> 
   ],
 };
 
+/**
+ * 生成卖出二次确认串（CONFIRM_SELL-XXXX）。
+ *
+ * 注意：这是纯粹的行为摩擦机制（Robinhood 风格），用于阻止冲动卖出；
+ * 确认串在客户端生成、服务端不做校验，不具备任何安全/授权语义。
+ * 真正的权限控制由后端 sessionMiddleware + 金额/持仓校验负责。
+ */
 function generateConfirmCode(): string {
   return `CONFIRM_SELL-${Math.floor(1000 + Math.random() * 9000)}`;
 }

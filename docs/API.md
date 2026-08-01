@@ -306,6 +306,8 @@ List reconciliation records (most recent 24 months).
 
 Monthly reconciliation: compare broker-reported total assets against the system view (fund pool cash + holdings valued at latest closes). Variance <= 1% auto-confirms; > 1% is stored as `PENDING` awaiting calibration. Upserts by `(user, month)`.
 
+Note: `deposits`/`withdrawals`/`gains`/`fees` are informational only (user-entered monthly flows) and do not affect the variance computation. The stored `beginning_balance` is the system-side total assets at reconciliation time (cash + holdings), not the month's opening balance.
+
 **Request:**
 ```json
 {
@@ -338,4 +340,6 @@ Monthly reconciliation: compare broker-reported total assets against the system 
 
 ### POST /api/reconciliation/:id/calibrate
 
-One-click calibration for a `PENDING` record: sets fund-pool cash to `broker_balance - holdings_value` (floored at 0), re-splits layer cash proportionally (LCH/evolved ratios when the pool was empty), and marks the record `CONFIRMED`.
+One-click calibration for a `PENDING` record: sets fund-pool cash to `broker_balance - holdings_value` (floored at 0), re-splits layer cash proportionally (layer ratio clamped to [0,1]; LCH/evolved ratios when the pool was empty), and marks the record `CONFIRMED`.
+
+By definition calibration absorbs the whole discrepancy into pool cash, so the response carries a `warnings` array reminding the user to verify holdings-level mismatches; holdings composition may no longer match the broker reality after calibrating.

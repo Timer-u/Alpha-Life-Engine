@@ -7,9 +7,18 @@ export interface ResolveActiveParamsResult {
   allocation: ActiveAllocation | null;
   pboRejected?: boolean;
   pboScore?: number | null;
+  staleReport?: boolean;
 }
 
 type D1Db = D1Database;
+
+// 超过该天数视为策略过期：回退 LCH 年龄分配兜底（与仪表盘红色阈值、提醒邮件一致）
+export const STALE_DAYS = 45;
+
+/** 钳位演化参数比例到 [0,1]，防止异常报告导致资金层出现负拆分 */
+export function clampRatio(n: number): number {
+  return Math.min(Math.max(n, 0), 1);
+}
 
 const PBO_REJECT_THRESHOLD = 0.5;
 
@@ -57,6 +66,12 @@ export async function resolveActiveParams(db: D1Db, userId: number): Promise<Res
     return { allocation: lchFallback(birthYear, birthMonth, birthDay), pboRejected: true, pboScore: report.pbo_score };
   }
 
+  // 策略过期：回退 LCH 年龄分配兜底（与过期提醒邮件的声明一致）
+  const staleMs = Date.now() - new Date(report.evolution_timestamp).getTime();
+  if (staleMs > STALE_DAYS * 24 * 60 * 60 * 1000) {
+    return { allocation: lchFallback(birthYear, birthMonth, birthDay), staleReport: true };
+  }
+
   let parsed: { recommended_params?: Record<string, unknown> };
   try {
     parsed = JSON.parse(report.report_data);
@@ -70,8 +85,8 @@ export async function resolveActiveParams(db: D1Db, userId: number): Promise<Res
   }
 
   const lch = birthYear ? calculateLCHAllocation(birthYear, birthMonth, birthDay) : null;
-  const safeRatio = typeof p.safe_ratio === 'number' ? p.safe_ratio : (lch?.safe_ratio ?? 0.6);
-  const ambitionRatio = typeof p.ambition_ratio === 'number' ? p.ambition_ratio : (lch?.ambition_ratio ?? 0.4);
+  const safeRatio = clampRatio(typeof p.safe_ratio === 'number' ? p.safe_ratio : (lch?.safe_ratio ?? 0.6));
+  const ambitionRatio = clampRatio(typeof p.ambition_ratio === 'number' ? p.ambition_ratio : (lch?.ambition_ratio ?? 0.4));
   const bsmThreshold = typeof p.bsm_threshold === 'number' ? p.bsm_threshold : 1.4;
   const maShort = typeof p.ma_short_window === 'number' ? p.ma_short_window : 20;
   const maLong = typeof p.ma_long_window === 'number' ? p.ma_long_window : 60;

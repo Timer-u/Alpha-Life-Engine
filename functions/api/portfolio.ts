@@ -3,8 +3,10 @@ import type { Env, Variables } from './[[route]]';
 import { Hono } from 'hono';
 import { z } from 'zod';
 
+import { TRIGGER_CONSTANTS } from '../../src/types/api';
+
 import { sessionMiddleware } from './auth';
-import { resolveActiveParams } from './lch-utils';
+import { resolveActiveParams, STALE_DAYS } from './lch-utils';
 import { computeLayerPerformance } from './performance';
 
 const portfolioRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -15,6 +17,13 @@ function nowIso(): string {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** 按 safeRatio 拆分充值金额到安全/进取两层，进取层取余保证两层之和恒等于金额 */
+export function splitDeposit(amount: number, safeRatio: number): { safeAdded: number; ambitionAdded: number } {
+  const safeAdded = round2(amount * safeRatio);
+  const ambitionAdded = round2(amount - safeAdded);
+  return { safeAdded, ambitionAdded };
 }
 
 /**
@@ -45,21 +54,19 @@ async function enrichPositionsWithMarketPrices(
   if (positions.length === 0) return [];
 
   const symbols = [...new Set(positions.map(p => p.symbol))];
+  const placeholders = symbols.map(() => '?').join(',');
 
-  const priceMap: Record<string, number> = {};
-  for (const symbol of symbols) {
-    const result = await db.prepare(
-      `SELECT close FROM market_data WHERE symbol = ? AND close IS NOT NULL ORDER BY date DESC LIMIT 1`
-    ).bind(symbol).all<{ close: number }>();
-
-    if (result.results.length > 0) {
-      priceMap[symbol] = result.results[0].close;
-    }
-  }
+  const priceRows = await db.prepare(
+    `SELECT m.symbol, m.close FROM market_data m
+     JOIN (SELECT symbol, MAX(date) AS max_date FROM market_data
+           WHERE symbol IN (${placeholders}) AND close IS NOT NULL GROUP BY symbol) latest
+     ON m.symbol = latest.symbol AND m.date = latest.max_date`
+  ).bind(...symbols).all<{ symbol: string; close: number }>();
+  const priceMap = new Map(priceRows.results.map(row => [row.symbol, row.close]));
 
   const now = nowIso();
   return positions.map(pos => {
-    const latestPrice = priceMap[pos.symbol];
+    const latestPrice = priceMap.get(pos.symbol);
     if (latestPrice && latestPrice > 0) {
       return {
         ...pos,
@@ -165,7 +172,7 @@ portfolioRouter.get('/', async (c) => {
       pboScore = lastStrategy.pbo_score;
 
       if (daysSinceEvolution <= 7) statusColor = 'green';
-      else if (daysSinceEvolution <= 45) statusColor = 'yellow';
+      else if (daysSinceEvolution <= STALE_DAYS) statusColor = 'yellow';
       else statusColor = 'red';
 
       if (pboScore !== null && pboScore > 0.5) statusColor = 'red';
@@ -181,8 +188,8 @@ portfolioRouter.get('/', async (c) => {
         recent_transactions: recentTransactions,
         trigger_status: {
           current_balance: balance,
-          trigger_line: 1667,
-          status: balance < 1667 ? 'accumulating' : 'triggerable',
+          trigger_line: TRIGGER_CONSTANTS.LINE,
+          status: balance < TRIGGER_CONSTANTS.LINE ? 'accumulating' : 'triggerable',
           last_decision: lastTrigger?.trigger_decision,
           last_decision_time: lastTrigger?.created_at,
         },
@@ -244,8 +251,7 @@ portfolioRouter.post('/deposit', async (c) => {
 
     const { allocation } = await resolveActiveParams(db, userId);
     const safeRatio = allocation?.safe_ratio ?? 0.6;
-    const safeAdded = round2(amount * safeRatio);
-    const ambitionAdded = round2(amount - safeAdded);
+    const { safeAdded, ambitionAdded } = splitDeposit(amount, safeRatio);
 
     const newTotal = round2(portfolio.total_balance + amount);
     const newSafe = round2(portfolio.safe_layer_balance + safeAdded);

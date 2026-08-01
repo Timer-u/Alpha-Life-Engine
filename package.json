@@ -24,6 +24,8 @@
     "database:import-market:prod": "wrangler d1 execute alpha-life-prod --file=./data/market_data/import_market_data.sql --remote",
     "market:update:prod": "tsx scripts/daily-market-update.ts --prod",
     "types": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "lint:python": "ruff check scripts/local_evolver/ data/",
@@ -68,6 +70,7 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",
     "vite": "^8.2.0",
+    "vitest": "^4.1.10",
     "wrangler": "^4.118.0"
   },
   "allowScripts": {

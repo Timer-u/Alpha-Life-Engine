@@ -29,7 +29,7 @@ function needsCalibration(rec: ReconciliationRecord): boolean {
 export default function Reconciliation() {
   const { logout } = useAuth();
   const { toast } = useToast();
-  const { reconciliations, isLoading, create, isCreating, calibrate, isCalibrating } = useReconciliation();
+  const { reconciliations, isLoading, isError, create, isCreating, calibrate, isCalibrating } = useReconciliation();
 
   const [month, setMonth] = useState(() => currentMonth());
   const [brokerBalance, setBrokerBalance] = useState('');
@@ -180,6 +180,8 @@ export default function Reconciliation() {
           <h2 className="text-lg font-semibold text-gray-900 mb-4">对账历史</h2>
           {isLoading ? (
             <p className="text-sm text-gray-400 animate-pulse py-8 text-center">加载中...</p>
+          ) : isError ? (
+            <p className="text-sm text-danger-600 text-center py-8">对账历史加载失败，请刷新页面重试</p>
           ) : reconciliations.length === 0 ? (
             <p className="text-sm text-gray-400 text-center py-8">暂无对账记录</p>
           ) : (

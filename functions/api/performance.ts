@@ -28,7 +28,7 @@ function round2(n: number): number {
  * - market_value：当日持仓市值（收盘价缺失时沿用最近价格）
  * - cumulative_gain：累计收益 = 市值 - 净投入
  */
-function buildSeries(txs: TxRow[], dates: string[], closes: Map<string, number>): PerformancePoint[] {
+export function buildSeries(txs: TxRow[], dates: string[], closes: Map<string, number>): PerformancePoint[] {
   if (txs.length === 0) return [];
   const firstTxDate = txs[0].created_at.slice(0, 10);
   const shares = new Map<string, number>();

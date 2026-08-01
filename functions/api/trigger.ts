@@ -8,11 +8,14 @@ import { z } from 'zod';
 import { triggerEngine } from '../../src/lib/trigger-engine';
 
 import { sessionMiddleware } from './auth';
-import { executionSuggestionEmailHtml, logNotification, sendEmail } from './email';
+import { executionSuggestionEmailHtml, logNotification, sendEmail, wasRecentlyNotified } from './email';
 import { resolveActiveParams } from './lch-utils';
 import { SAFE_SYMBOLS, symbolName, TRACKED_SYMBOLS } from './symbols';
 
 const triggerRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+// 同一执行建议邮件的最短间隔（天），防止重复手动触发时重复轰炸
+const EXECUTION_EMAIL_DEDUPE_DAYS = 1;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -71,26 +74,28 @@ triggerRouter.post('/', async (c) => {
     ).bind(userId, input.current_balance, response.decision, input.signal_value,
       response.executed_amount ?? 0, response.commission, nowIso()).run();
 
-    // EXECUTE 决策异步发送执行建议邮件（不阻塞响应）
+    // EXECUTE 决策异步发送执行建议邮件（不阻塞响应），1 天内去重
     if (response.decision === 'EXECUTE') {
       const user = await c.env.DB.prepare('SELECT email FROM users WHERE id = ?').bind(userId).first<{ email: string }>();
       if (user) {
-        const emailPromise = sendEmail(
-          c.env.RESEND_API_KEY,
-          user.email,
-          '执行建议：触发线已达成',
-          executionSuggestionEmailHtml({
-            executedAmount: response.executed_amount ?? 0,
-            safeAmount: response.layer_allocation.safe_amount,
-            ambitionAmount: response.layer_allocation.ambition_amount,
-            commission: response.commission,
-            nextSafeEtf: response.next_safe_etf,
-            nextSafeEtfName: symbolName(response.next_safe_etf),
-            message: response.message,
-          })
-        ).then(async (sent) => {
+        const emailPromise = (async () => {
+          if (await wasRecentlyNotified(c.env.DB, userId, 'execution_suggestion', EXECUTION_EMAIL_DEDUPE_DAYS)) return;
+          const sent = await sendEmail(
+            c.env.RESEND_API_KEY,
+            user.email,
+            '执行建议：触发线已达成',
+            executionSuggestionEmailHtml({
+              executedAmount: response.executed_amount ?? 0,
+              safeAmount: response.layer_allocation.safe_amount,
+              ambitionAmount: response.layer_allocation.ambition_amount,
+              commission: response.commission,
+              nextSafeEtf: response.next_safe_etf,
+              nextSafeEtfName: symbolName(response.next_safe_etf),
+              message: response.message,
+            })
+          );
           if (sent) await logNotification(c.env.DB, userId, 'execution_suggestion');
-        }).catch((err: unknown) => { console.error('Failed to send execution email:', err); });
+        })().catch((err: unknown) => { console.error('Failed to send execution email:', err); });
         c.executionCtx.waitUntil(emailPromise);
       }
     }

@@ -1,9 +1,8 @@
 import type { Env } from './[[route]]';
 
 import { logNotification, sendEmail, strategyExpiryEmailHtml, wasRecentlyNotified } from './email';
+import { STALE_DAYS } from './lch-utils';
 
-// 与仪表盘红色状态阈值一致：超过 45 天视为策略过期
-const STALE_DAYS = 45;
 // 同类提醒最短间隔（天），防止每日 cron 重复轰炸
 const REMIND_INTERVAL_DAYS = 7;
 

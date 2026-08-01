@@ -149,7 +149,7 @@ transactionRouter.post('/', async (c) => {
         statements.push(
           db.prepare(
             `INSERT INTO positions (user_id, symbol, name, shares, avg_price, current_price, market_value, last_price_update, layer, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
           ).bind(userId, data.symbol, symbolName(data.symbol), newShares, round2(newAvgPrice),
             data.price, round2(newShares * data.price), now, data.layer, now, now)
         );
@@ -159,6 +159,15 @@ transactionRouter.post('/', async (c) => {
       safeDelta = data.layer === 'safe' ? delta : 0;
       ambitionDelta = data.layer === 'ambition' ? delta : 0;
     } else {
+      // 卖出金额需覆盖佣金，否则净回款为负会侵蚀层级资金池
+      if (amount + SHARE_EPSILON < commission) {
+        return c.json({
+          success: false,
+          error: 'Invalid input',
+          message: `卖出金额 ¥${amount.toFixed(2)} 不足以覆盖佣金 ¥${commission.toFixed(2)}，无法成交`,
+        }, 400);
+      }
+
       if (!position || position.shares + SHARE_EPSILON < data.shares) {
         return c.json({
           success: false,
@@ -183,18 +192,57 @@ transactionRouter.post('/', async (c) => {
       ambitionDelta = data.layer === 'ambition' ? proceeds : 0;
     }
 
-    statements.push(
-      db.prepare(
-        'UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ? WHERE user_id = ?'
-      ).bind(
-        round2(portfolio.total_balance + safeDelta + ambitionDelta),
-        round2(portfolio.safe_layer_balance + safeDelta),
-        round2(portfolio.ambition_layer_balance + ambitionDelta),
-        now, now, userId
-      )
-    );
+    // 买入：资金扣减加条件守卫（AND layer_balance >= cost），并发下余额被抢先消耗时
+    // UPDATE 影响行数为 0，batch 后据此补偿回滚并拒绝本次买入
+    const layerCol = data.layer === 'safe' ? 'safe_layer_balance' : 'ambition_layer_balance';
+    const newTotal = round2(portfolio.total_balance + safeDelta + ambitionDelta);
+    const newSafe = round2(portfolio.safe_layer_balance + safeDelta);
+    const newAmbition = round2(portfolio.ambition_layer_balance + ambitionDelta);
+
+    if (data.transaction_type === 'buy') {
+      statements.push(
+        db.prepare(
+          `UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ? WHERE user_id = ? AND ${layerCol} >= ?`
+        ).bind(newTotal, newSafe, newAmbition, now, now, userId, round2(amount + commission))
+      );
+    } else {
+      statements.push(
+        db.prepare(
+          'UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ? WHERE user_id = ?'
+        ).bind(newTotal, newSafe, newAmbition, now, now, userId)
+      );
+    }
 
     const results = await db.batch<TransactionRow>(statements);
+
+    // 并发守卫失败：撤销已写入的交易与持仓（资金层未被扣减），拒绝本次买入
+    if (data.transaction_type === 'buy' && (results[statements.length - 1]?.meta.changes ?? 0) === 0) {
+      const compensation: D1PreparedStatement[] = [];
+      const inserted = results[0]?.results[0] as TransactionRow | undefined;
+      if (inserted) {
+        compensation.push(db.prepare('DELETE FROM transactions WHERE id = ?').bind(inserted.id));
+      }
+      if (position) {
+        compensation.push(
+          db.prepare(
+            'UPDATE positions SET shares = ?, avg_price = ?, current_price = ?, market_value = ?, last_price_update = ?, updated_at = ? WHERE id = ?'
+          ).bind(position.shares, position.avg_price, data.price, round2(position.shares * data.price), now, now, position.id)
+        );
+      } else {
+        const insertedPos = results[1]?.results[0] as { id?: number } | undefined;
+        if (insertedPos?.id !== undefined) {
+          compensation.push(db.prepare('DELETE FROM positions WHERE id = ?').bind(insertedPos.id));
+        }
+      }
+      if (compensation.length > 0) await db.batch(compensation);
+
+      return c.json({
+        success: false,
+        error: 'Insufficient funds',
+        message: `${layerLabel}资金池余额不足：可用 ¥${layerBalance.toFixed(2)}，本次买入需 ¥${round2(amount + commission).toFixed(2)}（含佣金），请先充值资金池`,
+      }, 400);
+    }
+
     const inserted = results[0]?.results[0] ?? null;
 
     return c.json({ success: true, data: inserted, message: '交易记录已创建', timestamp: nowIso() }, 201);

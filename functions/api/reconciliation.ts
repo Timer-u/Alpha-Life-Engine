@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 
 import { sessionMiddleware } from './auth';
-import { resolveActiveParams } from './lch-utils';
+import { clampRatio, resolveActiveParams } from './lch-utils';
 
 const reconciliationRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -23,7 +23,11 @@ interface ReconciliationRow {
   id: number;
   user_id: number;
   reconciliation_date: string;
+  // 注意：beginning_balance 语义为“对账发起时系统总资产”（现金池 + 持仓市值），
+  // 并非月初余额；与券商侧对比仅作参考基准
   beginning_balance: number;
+  // deposits/withdrawals/gains/fees 为用户手工填写的月度出入金/盈亏/费用，仅作信息性存档，
+  // 不参与差异计算：variance = 券商总资产 - 系统总资产
   deposits: number;
   withdrawals: number;
   gains: number;
@@ -56,20 +60,30 @@ async function computeSystemState(db: D1Database, userId: number): Promise<{
   const positions = await db.prepare(
     'SELECT symbol, shares, current_price FROM positions WHERE user_id = ?'
   ).bind(userId).all<{ symbol: string; shares: number; current_price: number }>();
+  const holdings = positions.results;
 
   let holdingsValue = 0;
-  for (const pos of positions.results) {
-    const latest = await db.prepare(
-      'SELECT close FROM market_data WHERE symbol = ? AND close IS NOT NULL ORDER BY date DESC LIMIT 1'
-    ).bind(pos.symbol).first<{ close: number }>();
-    const price = latest?.close ?? pos.current_price;
-    holdingsValue += pos.shares * price;
+  if (holdings.length > 0) {
+    const symbols = [...new Set(holdings.map(pos => pos.symbol))];
+    const placeholders = symbols.map(() => '?').join(',');
+    const priceRows = await db.prepare(
+      `SELECT m.symbol, m.close FROM market_data m
+       JOIN (SELECT symbol, MAX(date) AS max_date FROM market_data
+             WHERE symbol IN (${placeholders}) AND close IS NOT NULL GROUP BY symbol) latest
+       ON m.symbol = latest.symbol AND m.date = latest.max_date`
+    ).bind(...symbols).all<{ symbol: string; close: number }>();
+    const priceMap = new Map(priceRows.results.map(row => [row.symbol, row.close]));
+
+    for (const pos of holdings) {
+      const price = priceMap.get(pos.symbol) ?? pos.current_price;
+      holdingsValue += pos.shares * price;
+    }
   }
 
   return { cash, holdingsValue: round2(holdingsValue), systemTotal: round2(cash.total_balance + holdingsValue) };
 }
 
-function variancePct(variance: number, base: number): number {
+export function variancePct(variance: number, base: number): number {
   if (base <= 0) return variance === 0 ? 0 : 1;
   return Math.abs(variance) / base;
 }
@@ -198,13 +212,14 @@ reconciliationRouter.post('/:id/calibrate', async (c) => {
     const { cash, holdingsValue } = await computeSystemState(db, userId);
     const targetCash = Math.max(round2(rec.ending_balance - holdingsValue), 0);
 
-    // 现金按层级现有占比分摊；现金池为空时退回 LCH/演化比例
+    // 现金按层级现有占比分摊；占比钳位到 [0,1]，防止不一致余额产生负层现金。
+    // 现金池为空时退回 LCH/演化比例
     let safeRatio: number;
     if (cash.total_balance > 0) {
-      safeRatio = cash.safe_layer_balance / cash.total_balance;
+      safeRatio = clampRatio(cash.safe_layer_balance / cash.total_balance);
     } else {
       const { allocation } = await resolveActiveParams(db, userId);
-      safeRatio = allocation?.safe_ratio ?? 0.6;
+      safeRatio = clampRatio(allocation?.safe_ratio ?? 0.6);
     }
     const newSafe = round2(targetCash * safeRatio);
     const newAmbition = round2(targetCash - newSafe);
@@ -218,6 +233,15 @@ reconciliationRouter.post('/:id/calibrate', async (c) => {
       ).bind('CONFIRMED', now, id),
     ]);
 
+    // 校准按定义把差异全部吸收进资金池现金，持仓构成可能仍与实际不符，需向用户明示
+    const diffAbs = Math.abs(rec.variance);
+    const warnings: string[] = [
+      rec.variance >= 0
+        ? `券商总资产高于系统 ${diffAbs.toFixed(2)} 元，差额已并入资金池现金`
+        : `系统总资产高于券商 ${diffAbs.toFixed(2)} 元，差额已从资金池现金扣除`,
+      '若差异实际源于券商侧买卖未被系统记录，请先核对持仓明细，否则校准后资产构成可能与实际不符',
+    ];
+
     return c.json({
       success: true,
       data: {
@@ -228,6 +252,7 @@ reconciliationRouter.post('/:id/calibrate', async (c) => {
         },
         holdings_value: holdingsValue,
         system_total: round2(targetCash + holdingsValue),
+        warnings,
       },
       message: `已校准：资金池现金调整为 ¥${targetCash.toFixed(2)}（安全层 ¥${newSafe.toFixed(2)} / 进取层 ¥${newAmbition.toFixed(2)}）`,
       timestamp: now,
