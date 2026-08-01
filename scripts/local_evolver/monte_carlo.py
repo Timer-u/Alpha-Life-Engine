@@ -14,7 +14,12 @@ from models import (
     MonteCarloSummary,
     PortfolioWeights,
 )
-from mpt import compute_covariance_matrix, compute_mean_returns
+from mpt import (
+    compute_covariance_matrix as compute_covariance_matrix,
+)
+from mpt import (
+    compute_mean_returns as compute_mean_returns,
+)
 
 
 def _get_device() -> torch.device:

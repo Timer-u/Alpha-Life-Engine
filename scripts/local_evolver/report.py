@@ -2,6 +2,7 @@
 
 import json
 import math
+from typing import Any
 
 import numpy as np
 import requests
@@ -386,7 +387,7 @@ def generate_report(
     )
 
 
-def _sanitize_for_json(obj):
+def _sanitize_for_json(obj: Any) -> Any:
     import numpy as np
 
     if isinstance(obj, (float, np.floating)):
@@ -399,7 +400,7 @@ def _sanitize_for_json(obj):
     return obj
 
 
-def _dataclass_to_dict(obj):
+def _dataclass_to_dict(obj: Any) -> Any:
     import torch
 
     if isinstance(obj, torch.Tensor):

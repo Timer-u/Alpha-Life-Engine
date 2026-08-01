@@ -17,10 +17,10 @@ build-backend = "setuptools.build_meta"
 name = "alpha-life-evolver"
 version = "0.1.0"
 description = "Alpha-Life Engine — Quantitative Strategy Evolver"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
     "torch>=2.12,<3",
-    "numpy>=1.26,<2",
+    "numpy>=2.5,<3",
     "pandas>=3.0,<4",
     "requests>=2.33,<3",
     "click>=8.1,<9",
@@ -31,10 +31,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0,<9",
-    "ruff>=0.11,<1",
-    "mypy>=1.15,<2",
-    "bandit>=1.8,<3",
+    "pytest>=9,<10",
+    "ruff>=0.16,<1",
+    "mypy>=2.3,<3",
+    "bandit>=1.9.4,<3",
     "types-PyYAML>=6.0",
     "types-requests>=2.32",
     "pre-commit>=4.0,<5",
@@ -51,6 +51,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
 filterwarnings = ["ignore::DeprecationWarning"]
+pythonpath = ["scripts/local_evolver"]
 
 # ── 覆盖率 ──
 [tool.coverage.run]
@@ -76,7 +77,7 @@ exclude_lines = [
 # 这样可以自动捕获新发布的 Ruff 规则。
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py313"
 line-length = 88
 
 [tool.ruff.lint]
@@ -104,6 +105,7 @@ ignore = [
     # 以下规则适用于通用业务代码，但与科学/量化计算代码冲突严重：
     "PLR2004",        # 魔法数字 — 科学常数（0.5772=Euler, 1e-15=epsilon, 2/3/4/5/10=最小观测值）命名化反而降低可读性
     "PLR0913",        # 参数过多 — 科学函数签名常需 6-10 个参数（数据、配置、开关等），拆分无益
+    "PLR0917",        # 位置参数过多 — 与 PLR0913 同理，科学函数签名参数多，拆分无益
 ]
 
 # ── per-file-ignores：按目录和文件精确豁免 ──
@@ -165,6 +167,7 @@ ignore = [
 ]
 "scripts/local_evolver/monte_carlo.py" = [
     "N806",           # L — Cholesky 分解结果
+    "PLC0414",        # import as 再导出 — mypy 2.x 关闭隐式再导出，synthetic 依赖 monte_carlo 公开 API
 ]
 "scripts/local_evolver/mpt.py" = [
     "N806",           # R — 收益率矩阵，N — 资产数量
@@ -238,11 +241,14 @@ preview = true
 # ============================================================================
 # 策略：启用 strict = true 获得完整类型安全性，
 # 按模块逐步收紧（scripts/local_evolver 现在已是有效包名 local_evolver）
-# 模块覆盖路径匹配 glob：scripts/local_evolver/* → 实际包名模式
+# mypy_path：本地模块解析根。注意 mypy 2.x 下该根内模块名变为扁平
+# （evolver/config/models 而非 scripts.local_evolver.*），overrides 需匹配扁平名。
+# 必须配合 --explicit-package-bases 使用，否则同一文件会映射出两个模块名。
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 strict = true
+mypy_path = "scripts/local_evolver"
 disable_error_code = [
     "import-untyped",   # scipy/sklearn 有包但无 stub
     "type-arg",         # dict/list 无泛型参数（科学计算代码常态）
@@ -255,14 +261,18 @@ show_error_codes = true          # 显示错误码便于针对性修复
 show_column_numbers = true       # 显示列号
 
 # ── 模块级覆盖 ──
-# 说明：numpy/pandas/torch/scipy 等科学计算库不提供完整 stub，
-# 因此对导入这些库的模块启用 ignore_missing_imports。
-# 当官方或第三方 stubs（如 pandas-stubs）成熟后，可逐个移除。
+# 说明（mypy 2.x 语义变化）：ignore_missing_imports 只对「被导入的模块」生效
+# （override 的 module 名指向被导入模块），不再对匹配模块内部发生的导入生效。
+# 因此第三方库豁免按被导入模块名单独列出；本地模块经 mypy_path 解析后不存在缺失。
 
 [[tool.mypy.overrides]]
 # 核心代码 — 渐进式类型（旧代码逐步添加标注）
-module = ["scripts.local_evolver.*"]
-ignore_missing_imports = true    # numpy/pandas/torch/scipy 等无 stub
+# mypy_path 根内模块为扁平命名，需逐一列出
+module = [
+    "api_client", "config", "cpcv", "dsr", "evolver", "models", "monitoring",
+    "monte_carlo", "mpt", "regime", "report", "risk", "sensitivity",
+    "stability", "synthetic", "walk_forward",
+]
 disallow_untyped_defs = false
 disallow_untyped_calls = false
 disallow_untyped_decorators = false
@@ -270,9 +280,17 @@ disallow_any_generics = false
 warn_return_any = false
 
 [[tool.mypy.overrides]]
-# 数据下载脚本
+# 测试文件（mypy_path 根下同样为扁平命名）
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_any_generics = false
+disallow_untyped_calls = false
+disallow_untyped_decorators = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+# 数据下载脚本（在 mypy_path 根之外，保持 data.* 命名）
 module = ["data.*"]
-ignore_missing_imports = true    # baostock 等无 stub
 disallow_untyped_defs = false
 disallow_untyped_calls = false
 disallow_untyped_decorators = false
@@ -280,14 +298,22 @@ disallow_any_generics = false
 warn_return_any = false
 
 [[tool.mypy.overrides]]
-# 测试文件
-module = ["scripts.local_evolver.tests.*"]
-ignore_missing_imports = true    # pytest 动态注入，numpy 无 stub
-disallow_untyped_defs = false
-disallow_any_generics = false
-disallow_untyped_calls = false
-disallow_untyped_decorators = false
-warn_return_any = false
+# 第三方科学计算库：未安装（pre-commit 的 --no-site-packages / CI 未装 baostock）
+# 或无 stub 时按 Any 处理，避免 import-not-found 阻塞检查。
+module = [
+    "numpy", "numpy.*",
+    "pandas", "pandas.*",
+    "torch", "torch.*",
+    "scipy", "scipy.*",
+    "sklearn", "sklearn.*",
+    "baostock", "baostock.*",
+    "requests", "requests.*",
+    "urllib3", "urllib3.*",
+    "click",
+    "yaml",
+    "pytest",
+]
+ignore_missing_imports = true
 
 
 # ============================================================================
