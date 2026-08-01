@@ -28,6 +28,10 @@ export default tseslint.config(
 
   eslintReact.configs.recommended,
 
+  reactHooks.configs.flat['recommended-latest'],
+
+  reactRefresh.configs.vite,
+
   {
     files: ["src/**/*.{ts,tsx}", "functions/**/*.{ts,tsx}", "database/**/*.ts", "scripts/**/*.ts"],
     languageOptions: {
@@ -47,19 +51,9 @@ export default tseslint.config(
       reportUnusedDisableDirectives: "warn",
     },
     plugins: {
-      "react-hooks": reactHooks,
-      "react-refresh": reactRefresh,
       perfectionist,
     },
     rules: {
-      "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
-
-      "react-refresh/only-export-components": [
-        "warn",
-        { allowConstantExport: true },
-      ],
-
       "no-console": ["warn", { allow: ["warn", "error"] }],
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-unused-vars": [

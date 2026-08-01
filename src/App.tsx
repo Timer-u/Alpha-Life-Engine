@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router';
+import { createBrowserRouter, Navigate, RouterProvider, useLocation, useOutlet } from 'react-router';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import ToastProvider from './components/Toast';
@@ -30,8 +30,9 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-function AnimatedRoutes() {
+function AnimatedOutlet() {
   const location = useLocation();
+  const outlet = useOutlet();
   const shouldReduceMotion = useReducedMotion() ?? false;
 
   return (
@@ -44,25 +45,30 @@ function AnimatedRoutes() {
         exit="exit"
         className="min-h-screen"
       >
-        <Routes location={location}>
-          <Route path="/login" element={<Login />} />
-          <Route path="/" element={<AuthGuard><Dashboard /></AuthGuard>} />
-          <Route path="/settings" element={<AuthGuard><Settings /></AuthGuard>} />
-          <Route path="/reconciliation" element={<AuthGuard><Reconciliation /></AuthGuard>} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        {outlet}
       </motion.div>
     </AnimatePresence>
   );
 }
 
+const router = createBrowserRouter([
+  {
+    element: <AnimatedOutlet />,
+    children: [
+      { path: '/login', element: <Login /> },
+      { path: '/', element: <AuthGuard><Dashboard /></AuthGuard> },
+      { path: '/settings', element: <AuthGuard><Settings /></AuthGuard> },
+      { path: '/reconciliation', element: <AuthGuard><Reconciliation /></AuthGuard> },
+      { path: '*', element: <Navigate to="/" replace /> },
+    ],
+  },
+]);
+
 export default function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
-        <BrowserRouter>
-          <AnimatedRoutes />
-        </BrowserRouter>
+        <RouterProvider router={router} />
       </ToastProvider>
     </ErrorBoundary>
   );
