@@ -17,7 +17,7 @@
 - **双账户结构** — 安全层（货币基金） + 进取层（权益 ETF），自动平衡
 - **1667 元触发线** — 余额达标自动执行买入，信号类型支持 BSM / DOUBLE / NORMAL / SKIP
 - **策略演化引擎** — MPT 有效前沿、蒙特卡洛压力测试、Walk-Forward 优化、DSR 排序、PBO 过滤（Python）
-- **自动行情更新** — GitHub Actions 每日 08:00 CST 自动拉取 BaoStock 数据
+- **自动行情更新** — GitHub Actions 每日 08:00 CST 自动拉取 AKShare 新浪数据
 - **OTP 邮箱认证** — 一次性验证码登录，7 天持久化会话
 - **实时仪表盘** — 投资组合概览、仓位详情、交易记录、触发进度
 
@@ -54,7 +54,7 @@
 
 ┌─────────────────────────────────────────────────┐
 │  Data Pipeline (scripts/)                        │
-│  BaoStock (免费 A 股数据源)                      │
+│  AKShare 新浪 (免费 A 股数据源)                    │
 │  → Python 下载 → CSV → SQL INSERT → D1          │
 └─────────────────────────────────────────────────┘
 
@@ -72,7 +72,7 @@
 | 前端 | React 19, React Router 7, Vite 8, TanStack React Query, ECharts 6, Tailwind CSS 4 |
 | 后端 | Hono, Cloudflare Workers, TypeScript |
 | 数据库 | Cloudflare D1 (SQLite) |
-| 数据源 | BaoStock（免费开源 A 股 API） |
+| 数据源 | AKShare 新浪源（免费 A 股行情） |
 | 策略演化 | Python（PyTorch, scikit-learn, NumPy, Pandas） |
 | CI/CD | GitHub Actions |
 
@@ -82,9 +82,10 @@
 | --- | --- | --- | --- |
 | 511360 | 海富通短融ETF | 安全层 | 主配，类货币基金 |
 | 511880 | 银华日利 | 安全层 | 备选轮动 |
-| 000300 | 沪深300（指数） | 进取层 | 2005年至今历史数据 |
-| 000905 | 中证500（指数） | 进取层 | 2005年至今历史数据 |
-| 000922 | 中证红利（指数） | 进取层 | 2008年至今历史数据 |
+| 511990 | 华宝添益 | 安全层 | 备选轮动 |
+| 510300 | 沪深300ETF | 进取层 | 大盘蓝筹 |
+| 510500 | 中证500ETF | 进取层 | 中盘成长 |
+| 515080 | 中证红利ETF | 进取层 | 高股息红利 |
 
 ## 快速开始
 
@@ -93,14 +94,14 @@
 | 工具 | 版本 | 用途 |
 | --- | --- | --- |
 | Node.js | ≥ 20 | 前端 + 脚本 |
-| Python | ≥ 3.8 | BaoStock 行情获取 |
+| Python | ≥ 3.8 | AKShare 行情获取 |
 | npm | ≥ 10 | 依赖管理 |
 | wrangler | ≥ 4 | D1 数据库 + Workers 部署 |
 
 ### 1. 安装依赖
 
 ```bash
-pip install baostock pandas
+pip install akshare pandas
 npm install
 ```
 
@@ -116,7 +117,7 @@ npm run database:migrate   # 本地 D1 建表
 npm run market:init   # 下载全量历史 + 导入 D1
 ```
 
-BaoStock 是免费开源 API，无需 API Key。首次下载约需 5-15 分钟。
+AKShare 新浪源是免费接口，无需 API Key。首次下载约需 5-15 分钟。
 
 ### 4. 启动本地开发
 
@@ -290,7 +291,7 @@ npm run pages:deploy
 │   └── types/              # TypeScript 类型定义
 ├── functions/api/          # 后端（Hono Workers 路由）
 ├── scripts/                # 数据管道 + 策略演化
-│   ├── bao-stock-setup.ts  # 全量数据下载
+│   ├── market-setup.ts      # 全量数据下载
 │   ├── daily-market-update.ts  # 每日更新
 │   └── local-evolver/      # Python 策略演化器
 ├── database/               # Schema + 迁移脚本

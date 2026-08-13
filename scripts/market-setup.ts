@@ -18,12 +18,7 @@ interface MarketSetupConfig {
 const FULL_HISTORY_START = '1990-01-01';
 
 function findPython(): string {
-  const python = resolvePythonCommand();
-  if (!python) {
-    console.error('ERROR: akshare or pandas not installed. Run: pip install akshare pandas');
-    process.exit(1);
-  }
-  return python;
+  return resolvePythonCommand();
 }
 
 function generateImportSql(config: MarketSetupConfig): void {

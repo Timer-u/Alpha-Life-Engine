@@ -7,7 +7,7 @@ Alpha-Life Engine follows a three-tier architecture:
 ```
 Browser → Cloudflare Workers (Hono API) → D1 Database
             ↕
-        BaoStock (Data Pipeline)
+        AKShare Sina (Data Pipeline)
             ↕
     Local Strategy Evolver (Python)
 ```
@@ -120,8 +120,8 @@ Cloudflare D1 is a serverless SQLite database.
 
 ### Flow
 ```
-BaoStock (A股数据源)
-    ↓ Python (baostock + pandas)
+AKShare Sina (A股数据源)
+    ↓ Python (akshare + pandas)
 CSV files in data/market_data/
     ↓ TypeScript script
 SQL INSERT statements
@@ -130,7 +130,7 @@ D1 market_data table
 ```
 
 ### Scripts
-- `bao-stock-setup.ts` — Full history download (1990-present), called by `npm run market:init`
+- `market-setup.ts` — Full history download (1990-present), called by `npm run market:init`
 - `daily-market-update.ts` — Incremental update (last 5 trading days), called by GitHub Actions
 
 ## Strategy Evolver (`scripts/local-evolver/`)

@@ -184,12 +184,12 @@ function execPythonWithRetry(scriptPath: string): string {
         console.log(`  Python attempt ${attempt}/${maxAttempts} failed; retrying...`);
         continue;
       }
-      throw new Error(`BaoStock fetch failed: ${detail || 'unknown error'}`, {
+      throw new Error(`Market data fetch failed: ${detail || 'unknown error'}`, {
         cause: error,
       });
     }
   }
-  throw new Error('BaoStock fetch failed (unreachable)');
+  throw new Error('Market data fetch failed (unreachable)');
 }
 
 function fetchDataViaPython(
@@ -200,16 +200,16 @@ function fetchDataViaPython(
   const pyFile = resolve(outputDir, 'daily_update.py');
   writeFileSync(pyFile, pyScript, 'utf8');
 
-  console.log('  Fetching latest quotes via BaoStock...');
+  console.log('  Fetching latest quotes via AKShare Sina...');
   const stdout = execPythonWithRetry(pyFile);
 
   const lines = stdout.split('\n');
   const lastLine = lines[lines.length - 1]?.trim();
-  if (!lastLine) throw new Error('BaoStock Python produced no output');
+  if (!lastLine) throw new Error('Market data Python produced no output');
   const parsed = JSON.parse(lastLine) as PythonSummary;
-  if (parsed.error) throw new Error(`BaoStock error: ${parsed.error}`);
+  if (parsed.error) throw new Error(`Market data error: ${parsed.error}`);
   if (parsed.failures?.length) {
-    throw new Error(`BaoStock query failed for symbol(s): ${parsed.failures.join(', ')}`);
+    throw new Error(`Market data query failed for symbol(s): ${parsed.failures.join(', ')}`);
   }
 
   const allData: MarketRow[] = [];
@@ -289,7 +289,7 @@ export async function dailyMarketUpdate(): Promise<void> {
     }
     console.log('');
 
-    console.log('Step 2: Fetch BaoStock data');
+    console.log('Step 2: Fetch AKShare Sina data');
     const data = fetchDataViaPython(outputDir, windows);
 
     if (data.length === 0) {
@@ -298,7 +298,7 @@ export async function dailyMarketUpdate(): Promise<void> {
           'No new market data for any tracked symbol on an Asia/Shanghai weekday. ' +
             'Expected on Chinese market holidays (CNY, National Day, etc.), but a real trading ' +
             'calendar is P1/out of scope so an empty weekday result is treated as a failure. ' +
-            'If today is a trading day, BaoStock or the pipeline is down.'
+            'If today is a trading day, the data source or the pipeline is down.'
         );
       }
       console.log('   No new data (Asia/Shanghai weekend — market closed, expected). Update skipped.');

@@ -41,7 +41,7 @@ def resolve_backtest_symbols(
     data: MarketDataInput,
     symbols: list[str],
 ) -> list[str]:
-    """Return the walk-forward working universe (safe proxies + ambition).
+    """Return the walk-forward working universe (safe money-market ETFs + ambition).
 
     Loudly fails if the backtest universe is not fully present, so the
     silent-collapse failure mode of C1 cannot recur.

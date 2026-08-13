@@ -38,7 +38,7 @@ def test_hysteresis_smooth():
 def test_detect_regimes(sample_market_data):
     result = detect_regimes(
         sample_market_data,
-        ["511360", "511880", "000300", "000905", "000922"],
+        ["511360", "511880", "511990", "510300", "510500", "515080"],
         lookback=20,
         n_states=3,
         hysteresis_window=5,

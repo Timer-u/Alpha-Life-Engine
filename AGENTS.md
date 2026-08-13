@@ -23,11 +23,11 @@ Personal quantitative DCA system with dual-layer accounts (safe + ambition), 166
 | Command | What |
 |---|---|
 | `npm run market:init` | Full history download + schema migrate |
-| `npm run market:update` | Incremental update (last 10 days, local D1) |
+| `npm run market:update` | Incremental update (AKShare Sina source, local D1) |
 | `npm run market:update:prod` | Incremental update, prod D1 (`--prod` flag) |
 | `npm run market:init:prod` | Full init for production |
 
-Scripts in `scripts/` — TypeScript via `tsx`, fetches from BaoStock (free Chinese A-share data).
+Scripts in `scripts/` — TypeScript via `tsx`, fetches via AKShare Sina (free Chinese A-share data).
 
 ## Strategy Evolver
 
@@ -84,7 +84,7 @@ Pre-commit: Python only (`ruff`, `mypy`, `bandit`). TS checks are CI-only (no pr
 
 - `npm run build` = `tsc && vite build` — types check then build; `build.sourcemap: true`
 - `allowScripts` in package.json: esbuild, sharp, workerd need explicit permission
-- BaoStock first download takes 5–15 min
+- AKShare Sina first download takes 5–15 min
 - Python scripts try `python` then `python3`
 - `scripts/local_evolver/` directory name uses underscore (not hyphen as in README)
 - TypeScript 6.x (latest), `types: ["node"]` in tsconfig

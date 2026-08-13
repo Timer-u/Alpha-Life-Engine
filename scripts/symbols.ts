@@ -43,12 +43,12 @@ export const TRACKED_SYMBOLS: readonly TrackedSymbol[] = [
   ...AMBITION_SYMBOLS,
 ];
 
-/** Strip the exchange prefix from a BaoStock code ('sh.000012' -> '000012'). */
+/** Strip the exchange prefix from a Sina/AKShare code ('sh.510300' -> '510300'). */
 export function symbolFromCode(code: string): string {
   return code.replace(/^(sh|sz)\./, '');
 }
 
-/** BaoStock code -> CSV basename ('sh.000012' -> 'sh_000012'). */
+/** Sina/AKShare code -> CSV basename ('sh.510300' -> 'sh_510300'). */
 export function baoCodeToCsvName(code: string): string {
   return code.replace('.', '_');
 }
