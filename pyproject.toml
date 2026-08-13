@@ -19,7 +19,7 @@ version = "0.1.0"
 description = "Alpha-Life Engine — Quantitative Strategy Evolver"
 requires-python = ">=3.13"
 dependencies = [
-    "baostock>=0.8,<1",
+    "akshare>=1.17,<2",
     "torch>=2.12,<3",
     "numpy>=2.5,<3",
     "pandas>=3.0,<4",
@@ -299,7 +299,7 @@ disallow_any_generics = false
 warn_return_any = false
 
 [[tool.mypy.overrides]]
-# 第三方科学计算库：未安装（pre-commit 的 --no-site-packages / CI 未装 baostock）
+# 第三方科学计算库：未安装（pre-commit 的 --no-site-packages / CI 未装 akshare）
 # 或无 stub 时按 Any 处理，避免 import-not-found 阻塞检查。
 module = [
     "numpy", "numpy.*",
@@ -307,7 +307,7 @@ module = [
     "torch", "torch.*",
     "scipy", "scipy.*",
     "sklearn", "sklearn.*",
-    "baostock", "baostock.*",
+    "akshare", "akshare.*",
     "requests", "requests.*",
     "urllib3", "urllib3.*",
     "click",
