@@ -1,16 +1,9 @@
 """Walk-Forward optimization scoring a real DCA strategy.
 
-The backtest safe layer runs on long-history bond *index* proxies
-(000012 / 000013 — see the C1 proxy assumption note below), not on the
-short-history money-fund ETFs (511360 / 511880) which exist only for live
-execution on the frontend. All series are aligned by explicit trading-date
-inner-join so a suspension/missing day can never silently shift one series
-against another.
-
-Proxy assumption (documented approximation — P1 fidelity tracking):
-a bond *index* is not the traded ETF: no fund fee, no tracking error, no
-bid/ask. The evolved params are therefore calibrated on index behaviour and
-mapped to the live ETFs at execution time.
+The backtest safe layer runs on real money-market ETFs（回测即实盘宇宙）:
+511360 / 511880 / 511990, the same universe the frontend executes live.
+All series are aligned by explicit trading-date inner-join so a
+suspension/missing day can never silently shift one series against another.
 """
 
 import random
@@ -35,12 +28,10 @@ from models import (
     WalkForwardWindow,
 )
 
-# Backtest safe layer = long-history bond indices (C1). Live-tradeable
-# money-fund ETFs are kept separate so the execution side is never confused
-# with the backtest side.
-BACKTEST_SAFE_SYMBOLS = ["000012", "000013"]
-LIVE_SAFE_SYMBOLS = ["511360", "511880"]
-AMBITION_SYMBOLS = ["000300", "000905", "000922"]
+# Backtest safe layer = real money-market ETFs（回测即实盘宇宙）; backtest
+# and live execution share the same symbol universe.
+BACKTEST_SAFE_SYMBOLS = ["511880", "511990", "511360"]
+AMBITION_SYMBOLS = ["510300", "510500", "515080"]
 BACKTEST_SYMBOLS = BACKTEST_SAFE_SYMBOLS + AMBITION_SYMBOLS
 
 INVALID_SCORE = float("-inf")

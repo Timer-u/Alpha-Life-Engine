@@ -81,10 +81,10 @@ class StrategyParameterSet:
     ma_short_window: int = 20
     ma_long_window: int = 60
     safe_allocation: dict[str, float] = field(
-        default_factory=lambda: {"000012": 0.8, "000013": 0.2}
+        default_factory=lambda: {"511880": 0.5, "511990": 0.3, "511360": 0.2}
     )
     ambition_allocation: dict[str, float] = field(
-        default_factory=lambda: {"000300": 0.4, "000905": 0.4, "000922": 0.2}
+        default_factory=lambda: {"510300": 0.4, "510500": 0.4, "515080": 0.2}
     )
 
 
@@ -97,10 +97,10 @@ class StrategyParameterBounds:
     ma_short_window: tuple[int, int] = (5, 50)
     ma_long_window: tuple[int, int] = (20, 200)
     safe_allocation: dict[str, tuple[float, float]] = field(
-        default_factory=lambda: {"000012": (0, 1), "000013": (0, 1)}
+        default_factory=lambda: {"511880": (0, 1), "511990": (0, 1), "511360": (0, 1)}
     )
     ambition_allocation: dict[str, tuple[float, float]] = field(
-        default_factory=lambda: {"000300": (0, 1), "000905": (0, 1), "000922": (0, 1)}
+        default_factory=lambda: {"510300": (0, 1), "510500": (0, 1), "515080": (0, 1)}
     )
 
 
@@ -190,7 +190,7 @@ class TransactionCostConfig:
 
     etf_bps: float = 3.0  # ETF 万分之三佣金（含规费、过户费），建议 2-5 bps
     etf_min_yuan: float = 5.0  # 单笔最低佣金 5 元（默认不免五元）；若券商免五元则改为 0
-    mmf_bps: float = 0.0  # 货币基金（511360/511880）成本约等于零
+    mmf_bps: float = 0.0  # 货币 ETF（511360/511880/511990）零成本假设，佣金按成交额收取
 
 
 @dataclass
