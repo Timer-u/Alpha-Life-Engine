@@ -14,11 +14,12 @@ const LAYER_SYMBOLS: Record<LayerType, Array<{ value: string; label: string }>> 
   safe: [
     { value: '511360', label: '511360 海富通短融ETF' },
     { value: '511880', label: '511880 银华日利' },
+    { value: '511990', label: '511990 华宝添益' },
   ],
   ambition: [
-    { value: '000300', label: '000300 沪深300' },
-    { value: '000905', label: '000905 中证500' },
-    { value: '000922', label: '000922 中证红利' },
+    { value: '510300', label: '510300 沪深300 ETF' },
+    { value: '510500', label: '510500 中证500 ETF' },
+    { value: '515080', label: '515080 中证红利 ETF' },
   ],
 };
 

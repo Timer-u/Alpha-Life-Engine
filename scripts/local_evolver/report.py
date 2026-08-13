@@ -462,7 +462,7 @@ def push_report_to_cloud(
         ).isoformat(),
     }
 
-    url = f"{api_base_url}/strategy/reports"
+    url = f"{api_base_url}/api/strategy/reports"
     resp = requests.post(
         url,
         json=payload,

@@ -41,7 +41,7 @@ def _create_retry_session() -> requests.Session:
 
 def fetch_market_data(api_base_url: str) -> MarketDataInput:
     token = _get_session_token()
-    url = f"{api_base_url}/market-data/history"
+    url = f"{api_base_url}/api/market-data/history"
 
     session = _create_retry_session()
     resp = session.get(url, cookies={"session_token": token}, timeout=120)
