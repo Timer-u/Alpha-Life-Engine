@@ -16,15 +16,27 @@ def sample_market_data() -> MarketDataInput:
     np.random.seed(42)
     n_days = 500
     base_prices = {
+        "000012": 100.0,
+        "000013": 100.0,
         "511360": 100.0,
         "511880": 100.0,
         "000300": 4000.0,
         "000905": 6000.0,
         "000922": 3000.0,
     }
+    safe_proxies = {"000012", "000013"}
+    ambition_indices = {"000300", "000905", "000922"}
     symbols = {}
     for sym, base in base_prices.items():
-        returns = np.random.normal(0.0002, 0.01, n_days)
+        vol = 0.0005 if sym in safe_proxies else 0.01
+        returns = np.random.normal(0.0002, vol, n_days)
+        if sym in ambition_indices:
+            # Inject a -40% single-day crash (day 300) so the ambition composite
+            # experiences a real panic episode: panic_ratio jumps to ~1.7 then
+            # decays through the 1.4 bsm_threshold band over ~20 days. Without it
+            # the fixture's max panic is ~1.09, so bsm_threshold and the MA-window
+            # SKIP/BSM interplay would be inert in the scoring tests.
+            returns[300] -= 0.4
         prices = base * np.cumprod(1 + returns)
         dates = [f"2023-{i // 30 + 1:02d}-{i % 30 + 1:02d}" for i in range(n_days)]
         symbols[sym] = DataFrame(
@@ -47,7 +59,7 @@ def sample_params() -> StrategyParameterSet:
         bsm_threshold=1.4,
         ma_short_window=20,
         ma_long_window=60,
-        safe_allocation={"511360": 0.8, "511880": 0.2},
+        safe_allocation={"000012": 0.8, "000013": 0.2},
         ambition_allocation={"000300": 0.4, "000905": 0.4, "000922": 0.2},
     )
 
@@ -61,7 +73,7 @@ def sample_bounds() -> StrategyParameterBounds:
         bsm_threshold=(1.0, 2.0),
         ma_short_window=(5, 50),
         ma_long_window=(20, 200),
-        safe_allocation={"511360": (0, 1), "511880": (0, 1)},
+        safe_allocation={"000012": (0, 1), "000013": (0, 1)},
         ambition_allocation={"000300": (0, 1), "000905": (0, 1), "000922": (0, 1)},
     )
 

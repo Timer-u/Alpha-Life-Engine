@@ -22,7 +22,7 @@ Required for production:
 
 ```toml
 name = "alpha-life-engine"
-main = "_worker.js"
+main = "functions/api/[[route]].ts"
 compatibility_date = "2026-01-01"
 
 [env.production]
@@ -62,7 +62,7 @@ npm run market:init:prod
 
 ```bash
 npm run build       # TypeScript check + Vite build
-npm run pages:deploy  # Deploy to Cloudflare Pages
+npm run deploy  # Deploy to Cloudflare Workers
 ```
 
 ### 6. Configure Email Whitelist

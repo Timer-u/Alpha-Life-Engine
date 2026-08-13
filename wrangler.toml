@@ -1,5 +1,5 @@
 name = "alpha-life-engine"
-main = "_worker.js"
+main = "functions/api/[[route]].ts"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 

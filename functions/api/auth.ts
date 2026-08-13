@@ -18,9 +18,10 @@ export async function sessionMiddleware(c: Context<{ Bindings: Env; Variables: V
   }
 
   const now = nowIso();
+  const tokenHash = await sha256Hex(match[1]);
   const session = await c.env.DB.prepare(
     'SELECT s.*, u.email, u.name FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND s.expires_at > ? LIMIT 1'
-  ).bind(match[1], now).all<{
+  ).bind(tokenHash, now).all<{
     id: number;
     token: string;
     user_id: number;
@@ -53,11 +54,16 @@ const otpVerifySchema = z.object({
   otp: z.string().length(6).regex(/^\d{6}$/),
 });
 
+const OTP_REQUEST_COOLDOWN_MS = 60_000; // 60s between sends to the same email
+const OTP_REQUEST_HOURLY_CAP = 10; // max sends per email per rolling hour
+const OTP_MAX_ATTEMPTS = 5; // failed verifies before an issued code is dead
+
 interface OtpRow {
   id: number;
   email: string;
   code: string;
   used: number;
+  attempts: number;
   created_at: string;
   expires_at: string;
 }
@@ -78,9 +84,10 @@ async function getUserFromSession(c: Context<{ Bindings: Env }>, now: string) {
   const match = cookie.match(/session_token=([^;\s]+)/);
   if (!match) return null;
 
+  const tokenHash = await sha256Hex(match[1]);
   const session = await c.env.DB.prepare(
     'SELECT s.*, u.email, u.name, u.preferences FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ? AND s.expires_at > ? LIMIT 1'
-  ).bind(match[1], now).all<{
+  ).bind(tokenHash, now).all<{
     id: number;
     token: string;
     user_id: number;
@@ -101,13 +108,27 @@ async function getUserFromSession(c: Context<{ Bindings: Env }>, now: string) {
 }
 
 function generateOtp(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  // The 6-digit code is the only credential in this passwordless system, so
+  // Math.random() (not CSPRNG) is unacceptable. Draw a 32-bit value from
+  // crypto.getRandomValues and rejection-sample above the largest multiple of
+  // 900000 in [0, 2^32) so the modulo is unbiased.
+  const arr = new Uint32Array(1);
+  const limit = 0xffffffff - (0xffffffff % 900000);
+  do {
+    crypto.getRandomValues(arr);
+  } while (arr[0] >= limit);
+  return (100000 + (arr[0] % 900000)).toString();
 }
 
 function generateToken(): string {
   const arr = new Uint8Array(32);
   crypto.getRandomValues(arr);
   return Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
 }
 
 function addDays(days: number): string {
@@ -146,9 +167,29 @@ authRouter.post('/otp/request', async (c) => {
       return c.json({ success: false, error: 'Unauthorized', message: '邮箱未在白名单中' }, 403);
     }
 
+    // Per-email 60s cooldown: the last sent code must be older than the window.
+    const cooldownFrom = new Date(Date.now() - OTP_REQUEST_COOLDOWN_MS).toISOString();
+    const lastSent = await db.prepare(
+      'SELECT MAX(created_at) AS last_sent FROM otps WHERE email = ?'
+    ).bind(email).first<{ last_sent: string }>();
+
+    if (lastSent && lastSent.last_sent >= cooldownFrom) {
+      return c.json({ success: false, error: 'Too Many Requests', message: '发送过于频繁，请稍后再试' }, 429);
+    }
+
+    // Rolling hourly cap per email, counted from otps.created_at.
+    const hourFrom = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const hourCount = await db.prepare(
+      'SELECT COUNT(*) AS sent_hour FROM otps WHERE email = ? AND created_at > ?'
+    ).bind(email, hourFrom).first<{ sent_hour: number }>();
+
+    if ((hourCount?.sent_hour ?? 0) >= OTP_REQUEST_HOURLY_CAP) {
+      return c.json({ success: false, error: 'Too Many Requests', message: '发送次数已达上限，请稍后再试' }, 429);
+    }
+
     const code = generateOtp();
     await db.prepare(
-      'INSERT INTO otps (email, code, used, created_at, expires_at) VALUES (?, ?, 0, ?, ?)'
+      'INSERT INTO otps (email, code, used, attempts, created_at, expires_at) VALUES (?, ?, 0, 0, ?, ?)'
     ).bind(email, code, nowIso(), addMinutes(10)).run();
 
     await sendOtpEmail(email, code, c.env.RESEND_API_KEY);
@@ -166,16 +207,32 @@ authRouter.post('/otp/verify', async (c) => {
     const db = c.env.DB;
     const now = nowIso();
 
+    // Attribute every attempt to the newest live code so the attempt cap is
+    // enforceable. No-code, dead-code and wrong-code all answer identically.
     const otpResult = await db.prepare(
-      'SELECT * FROM otps WHERE email = ? AND code = ? AND used = 0 AND expires_at > ? LIMIT 1'
-    ).bind(email, otp, now).all<OtpRow>();
+      'SELECT * FROM otps WHERE email = ? AND used = 0 AND expires_at > ? ORDER BY id DESC LIMIT 1'
+    ).bind(email, now).all<OtpRow>();
 
     if (!otpResult.results.length) {
       return c.json({ success: false, error: 'Invalid OTP', message: '验证码无效或已过期' }, 401);
     }
 
     const otpRow = otpResult.results[0];
-    await db.prepare('UPDATE otps SET used = 1 WHERE id = ?').bind(otpRow.id).run();
+
+    if (otpRow.attempts >= OTP_MAX_ATTEMPTS) {
+      return c.json({ success: false, error: 'Invalid OTP', message: '验证码无效或已过期' }, 401);
+    }
+
+    if (otpRow.code !== otp) {
+      await db.prepare('UPDATE otps SET attempts = attempts + 1 WHERE id = ?').bind(otpRow.id).run();
+      return c.json({ success: false, error: 'Invalid OTP', message: '验证码无效或已过期' }, 401);
+    }
+
+    // Atomic single-use: only one concurrent verify wins the used = 0 -> 1 flip.
+    const consume = await db.prepare('UPDATE otps SET used = 1 WHERE id = ? AND used = 0').bind(otpRow.id).run();
+    if (consume.meta.changes !== 1) {
+      return c.json({ success: false, error: 'Invalid OTP', message: '验证码无效或已过期' }, 401);
+    }
 
     const userResult = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).all<UserRow>();
     let user: UserRow;
@@ -195,18 +252,19 @@ authRouter.post('/otp/verify', async (c) => {
 
     const sessionDays = parseInt(c.env.SESSION_DAYS || '7');
     const token = generateToken();
+    const tokenHash = await sha256Hex(token);
     const expiresAt = addDays(sessionDays);
 
     await db.prepare(
       'INSERT INTO sessions (token, user_id, created_at, expires_at, last_active) VALUES (?, ?, ?, ?, ?)'
-    ).bind(token, user.id, now, expiresAt, now).run();
+    ).bind(tokenHash, user.id, now, expiresAt, now).run();
 
     const isSecure = c.env.ENVIRONMENT === 'production';
     c.header('Set-Cookie', `session_token=${token}; HttpOnly; Path=/; Max-Age=${sessionDays * 86400}; ${isSecure ? 'Secure; ' : ''}SameSite=Strict`);
 
     return c.json({
       success: true,
-      data: { token, user: { id: user.id, email: user.email, name: user.name }, expires_at: expiresAt },
+      data: { user: { id: user.id, email: user.email, name: user.name }, expires_at: expiresAt },
     });
   } catch (error) {
     return c.json({ success: false, error: 'Failed', message: (error as Error).message }, 500);
@@ -218,7 +276,8 @@ authRouter.post('/logout', async (c) => {
   const cookie = c.req.header('cookie') ?? '';
   const match = cookie.match(/session_token=([^;\s]+)/);
   if (match) {
-    await c.env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(match[1]).run();
+    const tokenHash = await sha256Hex(match[1]);
+    await c.env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(tokenHash).run();
   }
   c.header('Set-Cookie', 'session_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict');
   return c.json({ success: true, data: { message: '已退出登录' } });

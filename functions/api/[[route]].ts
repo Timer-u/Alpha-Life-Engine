@@ -1,8 +1,11 @@
+import type { Context } from 'hono'
+
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 
 import { authRouter } from './auth'
 import { marketDataRouter } from './market-data'
+import { runScheduledNotifications } from './notifications'
 import { portfolioRouter } from './portfolio'
 import { reconciliationRouter } from './reconciliation'
 import { strategyRouter } from './strategy'
@@ -18,6 +21,14 @@ export interface Env {
 
 export type Variables = {
   userId: number
+}
+
+const healthHandler = (c: Context<{ Bindings: Env }>) => {
+  return c.json({
+    success: true,
+    data: { status: 'ok', env: c.env.ENVIRONMENT },
+    timestamp: new Date().toISOString(),
+  })
 }
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>({
@@ -45,21 +56,16 @@ app.options('*', () => {
   return new Response(null, { status: 204 })
 })
 
-app.get('/health', (c) => {
-  return c.json({
-    success: true,
-    data: { status: 'ok', env: c.env.ENVIRONMENT },
-    timestamp: new Date().toISOString(),
-  })
-})
+app.get('/health', healthHandler)
+app.get('/api/health', healthHandler)
 
-app.route('/auth', authRouter)
-app.route('/portfolio', portfolioRouter)
-app.route('/transactions', transactionRouter)
-app.route('/trigger', triggerRouter)
-app.route('/strategy', strategyRouter)
-app.route('/market-data', marketDataRouter)
-app.route('/reconciliation', reconciliationRouter)
+app.route('/api/auth', authRouter)
+app.route('/api/portfolio', portfolioRouter)
+app.route('/api/transactions', transactionRouter)
+app.route('/api/trigger', triggerRouter)
+app.route('/api/strategy', strategyRouter)
+app.route('/api/market-data', marketDataRouter)
+app.route('/api/reconciliation', reconciliationRouter)
 
 app.notFound((c) => {
   return c.json(
@@ -86,4 +92,9 @@ app.onError((err, c) => {
   )
 })
 
-export const onRequest = app.fetch
+export default {
+  fetch: app.fetch,
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(runScheduledNotifications(env))
+  },
+}

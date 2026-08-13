@@ -7,7 +7,15 @@ from models import DataFrame, MarketDataInput
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-TRACKED_SYMBOLS = ["511360", "511880", "000300", "000905", "000922"]
+TRACKED_SYMBOLS = [
+    "000012",
+    "000013",
+    "000300",
+    "000905",
+    "000922",
+]  # Backtest universe: safe-layer bond-index proxies + ambition indices.
+# Live-execution money-fund ETFs (511360 / 511880) are tracked by the
+# frontend trigger engine, not by this evolver (see walk_forward.LIVE_SAFE_SYMBOLS).
 
 
 def _get_session_token() -> str:

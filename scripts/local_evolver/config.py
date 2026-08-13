@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 from models import (
     DEFAULT_EVOLVER_CONFIG,
+    DcaConfig,
     EvolverConfig,
     TransactionCostConfig,
 )
@@ -51,6 +52,20 @@ def load_config(path: str | None = None) -> EvolverConfig:
         etf_bps=etf_bps,
         etf_min_yuan=etf_min_yuan,
         mmf_bps=mmf_bps,
+    )
+
+    dca_cfg = cfg.get("dca", {})
+    monthly_contribution = float(dca_cfg.get("monthly_contribution", 1000.0))
+    contribution_freq_days = int(dca_cfg.get("contribution_freq_days", 21))
+    if monthly_contribution <= 0:
+        msg = f"monthly_contribution must be > 0, got {monthly_contribution}"
+        raise ValueError(msg)
+    if contribution_freq_days < 1:
+        msg = f"contribution_freq_days must be >= 1, got {contribution_freq_days}"
+        raise ValueError(msg)
+    config.dca = DcaConfig(
+        monthly_contribution=monthly_contribution,
+        contribution_freq_days=contribution_freq_days,
     )
 
     synthetic_cfg = cfg.get("synthetic", {})

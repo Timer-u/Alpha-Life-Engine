@@ -54,7 +54,18 @@ ETF_BPS_TO_RATIO: float = 10000.0  # Convert basis points to decimal
 WF_DEFAULT_NUM_WINDOWS: int = 6
 WF_DEFAULT_TRAIN_RATIO: float = 0.7
 WF_DEFAULT_NUM_PARAM_SETS: int = 200
-WF_MIN_OBSERVATIONS: int = 50
+WF_MIN_OBSERVATIONS: int = 63  # Legacy alias, see MIN_OBS_FOR_SHARPE below
+
+# ============================================================================
+# DCA Simulator (定投模拟)
+# ============================================================================
+DEFAULT_MONTHLY_CONTRIBUTION: float = 1000.0  # 每月定投金额（元）
+DEFAULT_CONTRIBUTION_FREQ_DAYS: int = 21  # 定投间隔（交易日 ≈ 一个月）
+
+# ============================================================================
+# Reproducibility
+# ============================================================================
+DEFAULT_SEED: int = 42  # Deterministic default RNG seed for the whole pipeline
 
 # ============================================================================
 # Monte Carlo Simulation
@@ -118,11 +129,15 @@ SYNTHETIC_FAT_TAIL_DOF: float = 3.0  # t-distribution degrees of freedom
 # ============================================================================
 # Minimum Observations for Statistical Validity
 # ============================================================================
-MIN_OBS_FOR_SHARPE: int = 5  # Minimum returns for Sharpe ratio
-MIN_OBS_FOR_SKEW: int = 3  # Minimum returns for skewness
-MIN_OBS_FOR_KURTOSIS: int = 4  # Minimum returns for kurtosis
-MIN_OBS_FOR_DRIFT: int = 20  # Minimum returns for drift detection
-MIN_OBS_FOR_BOOTSTRAP: int = 10  # Minimum returns for bootstrap CI
+# 63 trading days ≈ one trading quarter. Below this, a daily-Sharpe estimate
+# has unacceptably wide sampling error and skew/kurtosis estimates are noise.
+# These are HARD gates in the walk-forward scoring path (C5): insufficient
+# data must fail loudly instead of producing a meaningless score.
+MIN_OBS_FOR_SHARPE: int = 63
+MIN_OBS_FOR_SKEW: int = 63
+MIN_OBS_FOR_KURTOSIS: int = 63
+MIN_OBS_FOR_DRIFT: int = 63
+MIN_OBS_FOR_BOOTSTRAP: int = 63
 
 # ============================================================================
 # Numerical Constants

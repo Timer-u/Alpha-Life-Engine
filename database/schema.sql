@@ -149,6 +149,7 @@ CREATE TABLE IF NOT EXISTS otps (
   email TEXT NOT NULL,
   code TEXT NOT NULL,
   used INTEGER DEFAULT 0,
+  attempts INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   expires_at DATETIME NOT NULL
 );
@@ -184,6 +185,9 @@ CREATE INDEX IF NOT EXISTS idx_strategy_reports_user_id ON strategy_reports(user
 -- 已有数据库需手动迁移: CREATE UNIQUE INDEX IF NOT EXISTS idx_sr_user_evo ON strategy_reports(user_id, evolution_timestamp);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_otps_email ON otps(email);
+-- 注: 新数据库在 CREATE TABLE 中包含 otps.attempts 列（OTP 验证尝试上限）
+-- 已有数据库执行一次: database/migrations/001_otp_attempts.sql
+CREATE INDEX IF NOT EXISTS idx_otps_email_created ON otps(email, created_at);
 CREATE INDEX IF NOT EXISTS idx_email_whitelist_email ON email_whitelist(email);
 CREATE INDEX IF NOT EXISTS idx_reconciliations_user_date ON reconciliations(user_id, reconciliation_date);
 CREATE INDEX IF NOT EXISTS idx_notification_log_user_type ON notification_log(user_id, notification_type, sent_at);

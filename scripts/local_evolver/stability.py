@@ -9,13 +9,22 @@ by cancellation in simultaneous random perturbations.
 """
 
 import copy
+from collections.abc import Callable
 
 import numpy as np
+from constants import MIN_OBS_FOR_SHARPE
 from dsr import compute_sharpe_ratio
-from models import MarketDataInput, StabilityReport, StrategyParameterSet
+from models import (
+    DcaConfig,
+    MarketDataInput,
+    StabilityReport,
+    StrategyParameterSet,
+    TransactionCostConfig,
+)
 from walk_forward import (
     compute_portfolio_returns_for_params,
-    extract_returns_for_symbols,
+    extract_prices_for_symbols,
+    resolve_backtest_symbols,
 )
 
 
@@ -45,6 +54,58 @@ def _perturb_weights(
     return result
 
 
+def _perturb_size(base_val: float | int, radius: float) -> float:
+    """Perturbation step for a scalar parameter (>= 1 for integer params)."""
+    if isinstance(base_val, int):
+        return float(max(1, int(abs(base_val) * radius)))
+    return max(radius, abs(base_val) * radius)
+
+
+def _scalar_neighborhood_scores(
+    params: StrategyParameterSet,
+    name: str,
+    base_val: float | int,
+    perturb: float,
+    base_sharpe: float,
+    score_fn: Callable[[StrategyParameterSet], float],
+) -> tuple[list[float], list[float]]:
+    """Score ``params`` with scalar ``name`` shifted ``+/- perturb``."""
+    sharpes: list[float] = []
+    gradients: list[float] = []
+    for delta in (perturb, -perturb):
+        shifted = copy.deepcopy(params)
+        new_val = base_val + delta
+        if isinstance(base_val, int):
+            setattr(shifted, name, int(round(max(0, new_val))))
+        else:
+            setattr(shifted, name, max(0.0, new_val))
+        score = score_fn(shifted)
+        sharpes.append(score)
+        gradients.append(abs(score - base_sharpe) / perturb)
+    return sharpes, gradients
+
+
+def _weight_neighborhood_scores(
+    params: StrategyParameterSet,
+    weights_name: str,
+    symbol: str,
+    delta: float,
+    base_sharpe: float,
+    score_fn: Callable[[StrategyParameterSet], float],
+) -> tuple[list[float], list[float]]:
+    """Score ``params`` with allocation weight ``symbol`` shifted ``+/- delta``."""
+    sharpes: list[float] = []
+    gradients: list[float] = []
+    for step in (delta, -delta):
+        shifted = copy.deepcopy(params)
+        weights = getattr(shifted, weights_name)
+        setattr(shifted, weights_name, _perturb_weights(weights, symbol, step))
+        score = score_fn(shifted)
+        sharpes.append(score)
+        gradients.append(abs(score - base_sharpe) / delta)
+    return sharpes, gradients
+
+
 def check_stability(
     data: MarketDataInput,
     symbols: list[str],
@@ -53,27 +114,31 @@ def check_stability(
     gradient_threshold: float = 0.1,
     risk_free_rate: float = 0.0,
     test_ratio: float = 0.3,
+    cost_config: TransactionCostConfig | None = None,
+    dca_config: DcaConfig | None = None,
 ) -> StabilityReport:
-    all_rets = extract_returns_for_symbols(data, symbols)
-    if not all_rets:
-        return StabilityReport(
-            gradient=1.0, threshold=gradient_threshold, is_stable=False
-        )
+    wf_symbols = resolve_backtest_symbols(data, symbols)
+    all_prices = extract_prices_for_symbols(data, wf_symbols)
 
-    total_obs = len(all_rets[0])
+    total_obs = len(all_prices[0])
     test_start = int(total_obs * (1 - test_ratio))
     test_end = total_obs - 1
 
-    base_rets = compute_portfolio_returns_for_params(
-        symbols,
-        all_rets,
-        test_start,
-        test_end,
-        params,
-    )
-    base_sharpe = (
-        compute_sharpe_ratio(base_rets, risk_free_rate) if len(base_rets) >= 5 else -1.0
-    )
+    def _score(pp: StrategyParameterSet) -> float:
+        rets = compute_portfolio_returns_for_params(
+            wf_symbols,
+            all_prices,
+            test_start,
+            test_end,
+            pp,
+            cost_config,
+            dca_config,
+        )
+        if len(rets) < MIN_OBS_FOR_SHARPE:
+            return -1.0
+        return compute_sharpe_ratio(rets, risk_free_rate)
+
+    base_sharpe = _score(params)
 
     neighborhood_sharpes: list[float] = [base_sharpe]
     gradients: list[float] = []
@@ -88,126 +153,30 @@ def check_stability(
         ("ma_long_window", params.ma_long_window),
     ]
 
-    for _name, base_val in scalar_params:
+    for name, base_val in scalar_params:
         if base_val == 0:
             continue
-        if isinstance(base_val, int):
-            perturb: float = max(1, int(abs(base_val) * neighborhood_radius))
-        else:
-            perturb = max(neighborhood_radius, abs(base_val) * neighborhood_radius)
+        perturb = _perturb_size(base_val, neighborhood_radius)
         if perturb == 0:
             continue
+        sharpes, grads = _scalar_neighborhood_scores(
+            params, name, base_val, perturb, base_sharpe, _score
+        )
+        neighborhood_sharpes.extend(sharpes)
+        gradients.extend(grads)
 
-        p_up = copy.deepcopy(params)
-        new_val_up = base_val + perturb
-        if isinstance(base_val, int):
-            setattr(p_up, _name, int(round(new_val_up)))
-        else:
-            setattr(p_up, _name, new_val_up)
-        pr_up = compute_portfolio_returns_for_params(
-            symbols,
-            all_rets,
-            test_start,
-            test_end,
-            p_up,
-        )
-        score_up = (
-            compute_sharpe_ratio(pr_up, risk_free_rate) if len(pr_up) >= 5 else -1.0
-        )
-        neighborhood_sharpes.append(score_up)
-        gradients.append(abs(score_up - base_sharpe) / perturb)
-
-        p_down = copy.deepcopy(params)
-        new_val_down = max(0, base_val - perturb)
-        if isinstance(base_val, int):
-            setattr(p_down, _name, int(round(new_val_down)))
-        else:
-            setattr(p_down, _name, new_val_down)
-        pr_down = compute_portfolio_returns_for_params(
-            symbols,
-            all_rets,
-            test_start,
-            test_end,
-            p_down,
-        )
-        score_down = (
-            compute_sharpe_ratio(pr_down, risk_free_rate) if len(pr_down) >= 5 else -1.0
-        )
-        neighborhood_sharpes.append(score_down)
-        gradients.append(abs(score_down - base_sharpe) / perturb)
-
-    # Allocation weights
-    for sym in params.safe_allocation:
-        base_w = params.safe_allocation[sym]
-        delta = max(neighborhood_radius, abs(base_w) * neighborhood_radius)
-
-        p_up = copy.deepcopy(params)
-        p_up.safe_allocation = _perturb_weights(p_up.safe_allocation, sym, delta)
-        pr_up = compute_portfolio_returns_for_params(
-            symbols,
-            all_rets,
-            test_start,
-            test_end,
-            p_up,
-        )
-        score_up = (
-            compute_sharpe_ratio(pr_up, risk_free_rate) if len(pr_up) >= 5 else -1.0
-        )
-        neighborhood_sharpes.append(score_up)
-        gradients.append(abs(score_up - base_sharpe) / delta)
-
-        p_down = copy.deepcopy(params)
-        p_down.safe_allocation = _perturb_weights(p_down.safe_allocation, sym, -delta)
-        pr_down = compute_portfolio_returns_for_params(
-            symbols,
-            all_rets,
-            test_start,
-            test_end,
-            p_down,
-        )
-        score_down = (
-            compute_sharpe_ratio(pr_down, risk_free_rate) if len(pr_down) >= 5 else -1.0
-        )
-        neighborhood_sharpes.append(score_down)
-        gradients.append(abs(score_down - base_sharpe) / delta)
-
-    for sym in params.ambition_allocation:
-        base_w = params.ambition_allocation[sym]
-        delta = max(neighborhood_radius, abs(base_w) * neighborhood_radius)
-
-        p_up = copy.deepcopy(params)
-        p_up.ambition_allocation = _perturb_weights(
-            p_up.ambition_allocation, sym, delta
-        )
-        pr_up = compute_portfolio_returns_for_params(
-            symbols,
-            all_rets,
-            test_start,
-            test_end,
-            p_up,
-        )
-        score_up = (
-            compute_sharpe_ratio(pr_up, risk_free_rate) if len(pr_up) >= 5 else -1.0
-        )
-        neighborhood_sharpes.append(score_up)
-        gradients.append(abs(score_up - base_sharpe) / delta)
-
-        p_down = copy.deepcopy(params)
-        p_down.ambition_allocation = _perturb_weights(
-            p_down.ambition_allocation, sym, -delta
-        )
-        pr_down = compute_portfolio_returns_for_params(
-            symbols,
-            all_rets,
-            test_start,
-            test_end,
-            p_down,
-        )
-        score_down = (
-            compute_sharpe_ratio(pr_down, risk_free_rate) if len(pr_down) >= 5 else -1.0
-        )
-        neighborhood_sharpes.append(score_down)
-        gradients.append(abs(score_down - base_sharpe) / delta)
+    for weights_name, weights in (
+        ("safe_allocation", params.safe_allocation),
+        ("ambition_allocation", params.ambition_allocation),
+    ):
+        for symbol in weights:
+            base_w = weights[symbol]
+            delta = max(neighborhood_radius, abs(base_w) * neighborhood_radius)
+            sharpes, grads = _weight_neighborhood_scores(
+                params, weights_name, symbol, delta, base_sharpe, _score
+            )
+            neighborhood_sharpes.extend(sharpes)
+            gradients.extend(grads)
 
     avg_gradient = np.mean(gradients) if gradients else 1.0
 

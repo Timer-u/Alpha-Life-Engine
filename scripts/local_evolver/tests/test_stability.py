@@ -1,7 +1,9 @@
 """Tests for stability.py module."""
 
+import pytest
 from models import MarketDataInput, StrategyParameterSet
 from stability import _perturb_weights, check_stability
+from walk_forward import BACKTEST_SYMBOLS
 
 
 class TestPerturbWeights:
@@ -35,16 +37,14 @@ class TestPerturbWeights:
 
 
 def test_check_stability(sample_market_data, sample_params):
-    symbols = ["511360", "511880", "000300", "000905", "000922"]
-    report = check_stability(sample_market_data, symbols, sample_params)
+    report = check_stability(sample_market_data, BACKTEST_SYMBOLS, sample_params)
     assert report.gradient >= 0.0
     assert report.threshold > 0.0
     assert isinstance(report.is_stable, bool)
     assert len(report.neighborhood_sharpe_ratios) >= 2
 
 
-def test_check_stability_empty_data():
+def test_check_stability_empty_data_raises():
     empty_data = MarketDataInput(symbols={})
-    report = check_stability(empty_data, [], StrategyParameterSet())
-    assert report.gradient == 1.0
-    assert report.is_stable is False
+    with pytest.raises(ValueError, match="backtest universe"):
+        check_stability(empty_data, [], StrategyParameterSet())

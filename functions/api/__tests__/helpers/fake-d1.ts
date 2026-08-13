@@ -1,6 +1,6 @@
 export interface FakeD1Rule {
   match: (sql: string, args: unknown[]) => boolean;
-  rows: unknown[];
+  rows: unknown[] | ((sql: string, args: unknown[]) => unknown[]);
   changes?: number;
 }
 
@@ -54,7 +54,9 @@ export class FakeD1 {
   }
 
   resolveRows(sql: string, args: unknown[]): unknown[] {
-    return this.resolveRule(sql, args)?.rows ?? [];
+    const rule = this.resolveRule(sql, args);
+    if (!rule) return [];
+    return typeof rule.rows === 'function' ? rule.rows(sql, args) : rule.rows;
   }
 
   prepare(sql: string): FakeStatement {

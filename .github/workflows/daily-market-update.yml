@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   update-market-data:
@@ -57,11 +58,18 @@ jobs:
           D1_PROD_NAME: alpha-life-prod
         run: |
           if [ "${{ github.event.inputs.env }}" == "development" ]; then
-            npx tsx scripts/daily-market-update.ts --local
+            npx tsx scripts/daily-market-update.ts --dev
           else
             npx tsx scripts/daily-market-update.ts --prod
           fi
 
       - name: Notify on failure
         if: failure()
-        run: echo "Market data update failed for $(date -u)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # TODO(owner): wire a real email/webhook channel (e.g. Resend or ntfy).
+          # Until then, surface a GitHub issue so a red job is not silently ignored.
+          gh issue create \
+            --title "Daily market data update failed ($(date -u +%Y-%m-%d))" \
+            --body "The scheduled BaoStock market-data update failed. See run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

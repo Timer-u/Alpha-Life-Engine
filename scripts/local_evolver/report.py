@@ -37,11 +37,12 @@ from mpt import (
     compute_efficient_frontier_with_cpcv,
 )
 from risk import compute_mrc
+from seeding import seed_all
 from stability import check_stability
 from synthetic import run_all_scenarios
 from walk_forward import (
     compute_portfolio_returns_for_params,
-    extract_returns_for_symbols,
+    extract_prices_for_symbols,
     run_walk_forward,
 )
 
@@ -51,9 +52,13 @@ def generate_report(
     symbols: list[str],
     config: EvolverConfig | None = None,
     risk_free_rate: float = 0.025,
+    seed: int | None = None,
 ) -> StrategyReportData:
     if config is None:
         config = DEFAULT_EVOLVER_CONFIG
+
+    if seed is not None:
+        seed_all(seed)
 
     timestamp = __import__("datetime").datetime.now().isoformat()
 
@@ -251,8 +256,8 @@ def generate_report(
                 ],
             ])
 
-            all_returns = extract_returns_for_symbols(data, symbols)
-            total_obs_wf = len(all_returns[0]) if all_returns else 252
+            all_prices_wf = extract_prices_for_symbols(data, symbols)
+            total_obs_wf = len(all_prices_wf[0]) if all_prices_wf else 252
             test_start = int(total_obs_wf * 0.7)
 
             def _wf_model(X: np.ndarray) -> np.ndarray:
@@ -268,7 +273,7 @@ def generate_report(
                     )
                     rets = compute_portfolio_returns_for_params(
                         symbols,
-                        all_returns,
+                        all_prices_wf,
                         test_start,
                         total_obs_wf - 1,
                         p,
@@ -314,12 +319,12 @@ def generate_report(
     try:
         from monitoring import detect_drift
 
-        all_returns = extract_returns_for_symbols(data, symbols)
-        if all_returns and len(all_returns[0]) > 50:
+        all_prices_drift = extract_prices_for_symbols(data, symbols)
+        if all_prices_drift and len(all_prices_drift[0]) > 50:
             drift_cfg = load_drift_config()
             window_months = drift_cfg.get("window_months", 12)
             window_days = window_months * 21
-            total_obs = len(all_returns[0])
+            total_obs = len(all_prices_drift[0])
 
             # Backtest: use walk-forward out-of-sample test returns (real historical performance)
             backtest_returns = np.array([])
@@ -330,7 +335,7 @@ def generate_report(
                     best = best_results[0]
                     backtest_returns = compute_portfolio_returns_for_params(
                         symbols,
-                        all_returns,
+                        all_prices_drift,
                         best.window.test_start,
                         best.window.test_end,
                         best.optimal_params,
@@ -342,7 +347,7 @@ def generate_report(
                 live_start = total_obs - window_days
                 live_returns = compute_portfolio_returns_for_params(
                     symbols,
-                    all_returns,
+                    all_prices_drift,
                     live_start,
                     total_obs - 1,
                     recommended,
@@ -370,6 +375,7 @@ def generate_report(
     return StrategyReportData(
         timestamp=timestamp,
         config=config,
+        evolution_seed=seed,
         efficient_frontier=efficient_frontier,
         monte_carlo_result=mc_result,
         walk_forward_summary=wf_summary,

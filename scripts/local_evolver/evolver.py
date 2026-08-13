@@ -7,6 +7,7 @@ Usage:
 
 Options:
     --api-url       Backend API base URL (default: http://localhost:8787)
+    --seed          Random seed for reproducible runs (default: 42)
     --gbm-paths     Number of GBM paths (default: 10000)
     --wf-sets       Number of walk-forward parameter sets (default: 200)
     --frontier-pts  Number of efficient frontier points (default: 50)
@@ -20,9 +21,11 @@ import click
 import torch
 from api_client import TRACKED_SYMBOLS, fetch_market_data
 from config import load_config
+from constants import DEFAULT_SEED
 from dsr import compute_haircut_sharpe
 from models import DataFrame
 from report import generate_report, push_report_to_cloud, serialize_report
+from seeding import seed_all
 
 
 @click.command()
@@ -31,6 +34,13 @@ from report import generate_report, push_report_to_cloud, serialize_report
     default="http://localhost:8787",
     show_default=True,
     help="Backend API base URL (without /api prefix)",
+)
+@click.option(
+    "--seed",
+    default=DEFAULT_SEED,
+    type=int,
+    show_default=True,
+    help="Seed for random/numpy/torch RNGs; record in the emitted report",
 )
 @click.option(
     "--gbm-paths",
@@ -61,12 +71,14 @@ from report import generate_report, push_report_to_cloud, serialize_report
 )
 def main(
     api_url: str,
+    seed: int,
     gbm_paths: int,
     wf_sets: int,
     frontier_pts: int,
     *,
     no_push: bool = False,
 ) -> None:
+    seed_all(seed)
     token = os.environ.get("SESSION_TOKEN")
     if not token:
         click.echo("ERROR: SESSION_TOKEN environment variable is not set.", err=True)
@@ -74,6 +86,7 @@ def main(
         sys.exit(1)
 
     click.echo(f"Connecting to backend: {api_url}")
+    click.echo(f"Seed: {seed}")
     click.echo(f"GPU available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         click.echo(f"GPU device: {torch.cuda.get_device_name(0)}")
@@ -112,7 +125,7 @@ def main(
     symbols = TRACKED_SYMBOLS
 
     click.echo("  Step 1/4: Efficient frontier (GPU)...")
-    report = generate_report(data, symbols, config)
+    report = generate_report(data, symbols, config, seed=seed)
 
     click.echo("  Step 2/4: Monte Carlo stress test (GPU)...")
     click.echo(f"    Mean return: {report.monte_carlo_result.summary.mean_return:.4%}")

@@ -1,11 +1,31 @@
-"""GPU-accelerated Walk-Forward optimization."""
+"""Walk-Forward optimization scoring a real DCA strategy.
+
+The backtest safe layer runs on long-history bond *index* proxies
+(000012 / 000013 — see the C1 proxy assumption note below), not on the
+short-history money-fund ETFs (511360 / 511880) which exist only for live
+execution on the frontend. All series are aligned by explicit trading-date
+inner-join so a suspension/missing day can never silently shift one series
+against another.
+
+Proxy assumption (documented approximation — P1 fidelity tracking):
+a bond *index* is not the traded ETF: no fund fee, no tracking error, no
+bid/ask. The evolved params are therefore calibrated on index behaviour and
+mapped to the live ETFs at execution time.
+"""
 
 import random
 
 import numpy as np
-from cpcv import compute_returns_from_prices
+from constants import (
+    MIN_OBS_FOR_KURTOSIS,
+    MIN_OBS_FOR_SHARPE,
+    MIN_OBS_FOR_SKEW,
+    REBALANCE_FREQUENCY_DAYS,
+)
+from dca_sim import simulate_dca
 from dsr import compute_dsr, compute_kurtosis, compute_sharpe_ratio, compute_skewness
 from models import (
+    DcaConfig,
     MarketDataInput,
     StrategyParameterBounds,
     StrategyParameterSet,
@@ -15,8 +35,142 @@ from models import (
     WalkForwardWindow,
 )
 
-SAFE_SYMBOLS = ["511360", "511880"]
+# Backtest safe layer = long-history bond indices (C1). Live-tradeable
+# money-fund ETFs are kept separate so the execution side is never confused
+# with the backtest side.
+BACKTEST_SAFE_SYMBOLS = ["000012", "000013"]
+LIVE_SAFE_SYMBOLS = ["511360", "511880"]
 AMBITION_SYMBOLS = ["000300", "000905", "000922"]
+BACKTEST_SYMBOLS = BACKTEST_SAFE_SYMBOLS + AMBITION_SYMBOLS
+
+INVALID_SCORE = float("-inf")
+
+
+def resolve_backtest_symbols(
+    data: MarketDataInput,
+    symbols: list[str],
+) -> list[str]:
+    """Return the walk-forward working universe (safe proxies + ambition).
+
+    Loudly fails if the backtest universe is not fully present, so the
+    silent-collapse failure mode of C1 cannot recur.
+    """
+    missing_symbols = [s for s in BACKTEST_SYMBOLS if s not in symbols]
+    if missing_symbols:
+        msg = (
+            "backtest universe is not a subset of the given symbols; "
+            f"missing {missing_symbols}"
+        )
+        raise ValueError(msg)
+    missing_data = [s for s in BACKTEST_SYMBOLS if s not in data.symbols]
+    if missing_data:
+        msg = f"backtest universe missing market data; need {missing_data}"
+        raise ValueError(msg)
+    return list(BACKTEST_SYMBOLS)
+
+
+def check_data_sufficiency(
+    data: MarketDataInput,
+    symbols: list[str],
+    min_obs: int = MIN_OBS_FOR_SHARPE,
+) -> None:
+    """Data-sufficiency precondition (C5): loud failure naming the symbol.
+
+    Raises ``ValueError`` naming the offending symbol and its bar count so a
+    short/incomplete series can never silently produce a meaningless score.
+    """
+    for s in symbols:
+        df = data.symbols.get(s)
+        if df is None or not df.close:
+            msg = f"missing price data for symbol {s}"
+            raise ValueError(msg)
+        n = len(df.close)
+        if n < min_obs:
+            msg = f"{s}: only {n} bars, need >= {min_obs} for valid statistics"
+            raise ValueError(msg)
+        if len(df.dates) != n:
+            msg = (
+                f"{s}: dates/closes length mismatch "
+                f"({len(df.dates)} dates vs {n} closes)"
+            )
+            raise ValueError(msg)
+
+
+def extract_prices_for_symbols(
+    data: MarketDataInput,
+    symbols: list[str],
+) -> list[np.ndarray]:
+    """Explicit date-based alignment (inner join across trading dates).
+
+    Replaces the silent ``min(len)`` tail-alignment (C1): every symbol's
+    series is rebuilt on the intersection of its trading dates, in sorted
+    order, so a suspension day cannot shift series against each other.
+    """
+    if not symbols:
+        msg = "no symbols given"
+        raise ValueError(msg)
+
+    by_symbol: list[tuple[str, dict[str, float]]] = []
+    for s in symbols:
+        df = data.symbols.get(s)
+        if df is None or not df.close:
+            msg = f"symbol {s} has no close data"
+            raise ValueError(msg)
+        if len(df.dates) != len(df.close):
+            msg = (
+                f"symbol {s} has mismatched date/close arrays "
+                f"({len(df.dates)} vs {len(df.close)})"
+            )
+            raise ValueError(msg)
+        price_by_date = {d: float(c) for d, c in zip(df.dates, df.close, strict=True)}
+        if len(price_by_date) != len(df.dates):
+            msg = f"symbol {s} has duplicate trading dates"
+            raise ValueError(msg)
+        by_symbol.append((s, price_by_date))
+
+    common_dates: set[str] | None = None
+    for _, price_by_date in by_symbol:
+        common_dates = (
+            set(price_by_date)
+            if common_dates is None
+            else common_dates & set(price_by_date)
+        )
+    if not common_dates:
+        msg = "no common trading dates across symbols " + ", ".join(symbols)
+        raise ValueError(msg)
+
+    ordered = sorted(common_dates)
+    aligned: list[np.ndarray] = []
+    for _, price_by_date in by_symbol:
+        aligned.append(np.array([price_by_date[d] for d in ordered], dtype=np.float64))
+    return aligned
+
+
+def _prices_to_day_returns(prices: np.ndarray) -> np.ndarray:
+    """Day-aligned returns: ``returns[t] = prices[t]/prices[t-1] - 1``,
+    ``returns[0] = 0`` (index t refers to day t close, matching sim)."""
+    returns = np.zeros(len(prices))
+    if len(prices) > 1:
+        returns[1:] = prices[1:] / prices[:-1] - 1.0
+    return returns
+
+
+def _weighted_composite(
+    all_prices: list[np.ndarray],
+    symbols: list[str],
+    indices: list[int],
+    weights: dict[str, float],
+) -> np.ndarray:
+    base = all_prices[indices[0]]
+    composite = np.zeros(len(base))
+    total = 0.0
+    for idx in indices:
+        w = weights.get(symbols[idx], 0.0)
+        composite += w * all_prices[idx]
+        total += w
+    if total > 0:
+        composite /= total
+    return composite
 
 
 def generate_walk_forward_windows(
@@ -24,13 +178,22 @@ def generate_walk_forward_windows(
     num_windows: int = 6,
     train_ratio: float = 0.7,
 ) -> list[WalkForwardWindow]:
-    if total_obs < num_windows * 20:
-        msg = f"total_obs ({total_obs}) too small for {num_windows} windows"
+    if num_windows <= 0:
+        msg = f"num_windows must be >= 1, got {num_windows}"
+        raise ValueError(msg)
+    if not 0.0 < train_ratio < 1.0:
+        msg = f"train_ratio must be in (0, 1), got {train_ratio}"
         raise ValueError(msg)
 
     windows_per_fold = total_obs // num_windows
     train_size = int(windows_per_fold * train_ratio)
     test_size = windows_per_fold - train_size
+    if test_size < MIN_OBS_FOR_SHARPE:
+        msg = (
+            f"total_obs ({total_obs}) yields {test_size}-day test windows; "
+            f"need >= {MIN_OBS_FOR_SHARPE} for statistically valid Sharpe/DSR"
+        )
+        raise ValueError(msg)
 
     windows: list[WalkForwardWindow] = []
     for w in range(num_windows):
@@ -110,83 +273,104 @@ def extract_returns_for_symbols(
     data: MarketDataInput,
     symbols: list[str],
 ) -> list[np.ndarray]:
-    valid_symbols = [s for s in symbols if s in data.symbols and data.symbols[s].close]
-    if not valid_symbols:
-        return []
-    n = min(len(data.symbols[s].close) for s in valid_symbols)
-    if n < 10:
-        return []
-    result = []
-    for sym in symbols:
-        df = data.symbols.get(sym)
-        if df is None or not df.close:
-            result.append(np.zeros(n - 1))
-        else:
-            prices = df.close[-n:]
-            result.append(compute_returns_from_prices(prices))
-    return result
+    """Day-aligned daily returns per symbol (length-N convention)."""
+    return [
+        _prices_to_day_returns(p) for p in extract_prices_for_symbols(data, symbols)
+    ]
 
 
 def compute_portfolio_returns_for_params(
     symbols: list[str],
-    all_returns: list[np.ndarray],
+    all_prices: list[np.ndarray],
     start: int,
     end: int,
     params: StrategyParameterSet,
+    cost_config: TransactionCostConfig | None = None,
+    dca_config: DcaConfig | None = None,
 ) -> np.ndarray:
-    safe_indices = [symbols.index(s) for s in SAFE_SYMBOLS if s in symbols]
-    ambition_indices = [symbols.index(s) for s in AMBITION_SYMBOLS if s in symbols]
+    """TWR daily returns of the DCA strategy over ``[start, end]``.
 
-    length = end - start + 1
-    if length < 5:
+    The DCA simulator consumes the full aligned price history (so moving
+    averages at window start have true limited lookback) and is scored inside
+    the window. Costs are charged inside the simulator on real notional (C3).
+    """
+    if not all_prices:
+        return np.array([])
+    n_min = min(len(p) for p in all_prices)
+    if start < 0 or end < start or end >= n_min:
         return np.array([])
 
-    max_global_t = start + length - 1
-    for idx in safe_indices + ambition_indices:
-        if idx >= len(all_returns) or max_global_t >= len(all_returns[idx]):
-            return np.array([])
+    safe_indices = [symbols.index(s) for s in BACKTEST_SAFE_SYMBOLS if s in symbols]
+    ambition_indices = [symbols.index(s) for s in AMBITION_SYMBOLS if s in symbols]
+    if not safe_indices or not ambition_indices:
+        return np.array([])
 
-    combined = np.zeros(length)
-    for t in range(length):
-        global_t = start + t
+    safe_price = _weighted_composite(
+        all_prices, symbols, safe_indices, params.safe_allocation
+    )
+    ambition_price = _weighted_composite(
+        all_prices, symbols, ambition_indices, params.ambition_allocation
+    )
 
-        safe_ret = 0.0
-        safe_sum = 0.0
-        for idx in safe_indices:
-            w = params.safe_allocation.get(symbols[idx], 0.0)
-            safe_ret += w * all_returns[idx][global_t]
-            safe_sum += w
-        if safe_sum > 0:
-            safe_ret /= safe_sum
+    safe_returns = _prices_to_day_returns(safe_price)
+    ambition_returns = _prices_to_day_returns(ambition_price)
 
-        ambition_ret = 0.0
-        ambition_sum = 0.0
-        for idx in ambition_indices:
-            w = params.ambition_allocation.get(symbols[idx], 0.0)
-            ambition_ret += w * all_returns[idx][global_t]
-            ambition_sum += w
-        if ambition_sum > 0:
-            ambition_ret /= ambition_sum
+    cfg = cost_config if cost_config is not None else TransactionCostConfig()
+    dca = dca_config if dca_config is not None else DcaConfig()
 
-        combined[t] = (
-            params.safe_ratio * safe_ret + params.ambition_ratio * ambition_ret
-        )
-
-    return combined
+    outcome = simulate_dca(
+        safe_returns,
+        ambition_returns,
+        ambition_price,
+        params,
+        cfg,
+        dca,
+        start,
+        end,
+    )
+    return outcome.returns
 
 
-def apply_transaction_costs(
+def score_parameter_set(
+    symbols: list[str],
+    all_prices: list[np.ndarray],
+    start: int,
+    end: int,
+    params: StrategyParameterSet,
+    risk_free_rate: float = 0.0,
+    cost_config: TransactionCostConfig | None = None,
+    dca_config: DcaConfig | None = None,
+) -> float:
+    """Score a parameter set on the DCA strategy's TWR unit returns (C2).
+
+    Hard minimum-observation gate (C5): shorter windows return
+    ``INVALID_SCORE`` instead of a meaningless number.
+    """
+    rets = compute_portfolio_returns_for_params(
+        symbols,
+        all_prices,
+        start,
+        end,
+        params,
+        cost_config,
+        dca_config,
+    )
+    if len(rets) < MIN_OBS_FOR_SHARPE:
+        return INVALID_SCORE
+    return compute_sharpe_ratio(rets, risk_free_rate)
+
+
+def apply_transaction_costs_legacy(
     returns: np.ndarray,
     params: StrategyParameterSet,
     cost_config: TransactionCostConfig,
-    rebalance_freq_days: int = 21,
+    rebalance_freq_days: int = REBALANCE_FREQUENCY_DAYS,
 ) -> np.ndarray:
-    """扣除交易成本后的收益率。
+    """LEGACY daily-smear cost model — DEPRECATED (C3).
 
-    MMF 部分（511360/511880）：0 成本
-    ETF 部分（000300/000905/000922）：按调仓频率收取佣金
-    每笔交易成本 = max(etf_bps / 10000 * 交易金额, etf_min_yuan)
-    日摊销成本 = ambition_ratio * 每笔交易成本 / rebalance_freq_days
+    Superseded by event-driven commission inside ``dca_sim.simulate_dca``.
+    Kept only as a historical reference; it is NOT used anywhere in the
+    scoring/optimization path.
     """
     trade_notional_ratio = params.ambition_ratio
     cost_per_trade_bps = trade_notional_ratio * cost_config.etf_bps / 10000.0
@@ -202,26 +386,6 @@ def apply_transaction_costs(
         return returns
 
     return returns - cost_per_day
-
-
-def score_parameter_set(
-    symbols: list[str],
-    all_returns: list[np.ndarray],
-    start: int,
-    end: int,
-    params: StrategyParameterSet,
-    risk_free_rate: float = 0.0,
-    cost_config: TransactionCostConfig | None = None,
-    rebalance_freq_days: int = 21,
-) -> float:
-    rets = compute_portfolio_returns_for_params(
-        symbols, all_returns, start, end, params
-    )
-    if len(rets) < 5:
-        return -1.0
-    if cost_config is not None:
-        rets = apply_transaction_costs(rets, params, cost_config, rebalance_freq_days)
-    return compute_sharpe_ratio(rets, risk_free_rate)
 
 
 def _compute_pbo(
@@ -270,12 +434,13 @@ def run_walk_forward(
     risk_free_rate: float = 0.0,
     alpha: float = 0.05,
     cost_config: TransactionCostConfig | None = None,
+    dca_config: DcaConfig | None = None,
 ) -> WalkForwardSummary:
-    all_returns = extract_returns_for_symbols(data, symbols)
-    if not all_returns:
-        return WalkForwardSummary(pbo_score=1.0, stability_score=0.0)
+    wf_symbols = resolve_backtest_symbols(data, symbols)
+    check_data_sufficiency(data, wf_symbols, min_obs=MIN_OBS_FOR_SHARPE)
+    all_prices = extract_prices_for_symbols(data, wf_symbols)
 
-    total_obs = len(all_returns[0])
+    total_obs = len(all_prices[0])
     windows = generate_walk_forward_windows(total_obs, num_windows, train_ratio)
     param_sets = generate_random_parameter_sets(bounds, num_parameter_sets)
 
@@ -289,22 +454,24 @@ def run_walk_forward(
 
         for p in range(num_parameter_sets):
             tr_score = score_parameter_set(
-                symbols,
-                all_returns,
+                wf_symbols,
+                all_prices,
                 window.train_start,
                 window.train_end,
                 param_sets[p],
                 risk_free_rate,
                 cost_config,
+                dca_config,
             )
             te_score = score_parameter_set(
-                symbols,
-                all_returns,
+                wf_symbols,
+                all_prices,
                 window.test_start,
                 window.test_end,
                 param_sets[p],
                 risk_free_rate,
                 cost_config,
+                dca_config,
             )
             train_scores.append(tr_score)
             test_scores.append(te_score)
@@ -331,15 +498,19 @@ def run_walk_forward(
         best_test = test_scores[best_param_idx]
 
         best_rets = compute_portfolio_returns_for_params(
-            symbols,
-            all_returns,
+            wf_symbols,
+            all_prices,
             window.test_start,
             window.test_end,
             best_params,
+            cost_config,
+            dca_config,
         )
         n_best = len(best_rets)
-        ret_skew = compute_skewness(best_rets) if n_best >= 3 else 0.0
-        ret_kurt = compute_kurtosis(best_rets) if n_best >= 4 else 0.0
+        ret_skew = compute_skewness(best_rets) if n_best >= MIN_OBS_FOR_SKEW else 0.0
+        ret_kurt = (
+            compute_kurtosis(best_rets) if n_best >= MIN_OBS_FOR_KURTOSIS else 0.0
+        )
         dsr = compute_dsr(best_test, n_best, ret_skew, alpha, ret_kurt)
 
         results.append(

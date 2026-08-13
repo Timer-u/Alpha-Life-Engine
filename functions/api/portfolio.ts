@@ -3,7 +3,7 @@ import type { Env, Variables } from './[[route]]';
 import { Hono } from 'hono';
 import { z } from 'zod';
 
-import { TRIGGER_CONSTANTS } from '../../src/types/api';
+import { isEvolvedParams, TRIGGER_CONSTANTS } from '../../src/types/api';
 
 import { sessionMiddleware } from './auth';
 import { resolveActiveParams, STALE_DAYS } from './lch-utils';
@@ -180,6 +180,12 @@ portfolioRouter.get('/', async (c) => {
 
     const balance = portfolio?.total_balance ?? 0;
 
+    // 触发线跟随演化参数（与 trigger-engine 决策路径一致），无有效演化参数时回退默认 1667
+    const { allocation } = await resolveActiveParams(db, userId);
+    const triggerLine = allocation && isEvolvedParams(allocation)
+      ? (allocation.trigger_line ?? TRIGGER_CONSTANTS.LINE)
+      : TRIGGER_CONSTANTS.LINE;
+
     return c.json({
       success: true,
       data: {
@@ -188,8 +194,8 @@ portfolioRouter.get('/', async (c) => {
         recent_transactions: recentTransactions,
         trigger_status: {
           current_balance: balance,
-          trigger_line: TRIGGER_CONSTANTS.LINE,
-          status: balance < TRIGGER_CONSTANTS.LINE ? 'accumulating' : 'triggerable',
+          trigger_line: triggerLine,
+          status: balance < triggerLine ? 'accumulating' : 'triggerable',
           last_decision: lastTrigger?.trigger_decision,
           last_decision_time: lastTrigger?.created_at,
         },

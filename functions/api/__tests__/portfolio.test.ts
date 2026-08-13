@@ -8,6 +8,35 @@ import { asD1, FakeD1 } from './helpers/fake-d1';
 
 const SESSION_COOKIE = { Cookie: 'session_token=test-token' };
 
+const SESSION_ROW = { id: 1, token: 'test-token', user_id: 7, expires_at: '2099-01-01', created_at: '', last_active: '', email: 'a@b.c', name: null };
+
+const PREFS_ROW = { preferences: '{"birth_year":1990,"birth_month":6,"birth_day":15}' };
+
+function evolvedTriggerStrategyRow(triggerLine: number, opts: { pboScore?: number | null; staleDays?: number } = {}) {
+  return {
+    report_data: JSON.stringify({ recommended_params: { trigger_line: triggerLine } }),
+    pbo_score: opts.pboScore ?? null,
+    dsr_ranking: null,
+    evolution_timestamp: new Date(Date.now() - (opts.staleDays ?? 0) * 24 * 60 * 60 * 1000).toISOString(),
+  };
+}
+
+function sessionRule() {
+  return { match: (sql: string) => sql.includes('FROM sessions'), rows: [SESSION_ROW] };
+}
+
+function preferencesRule() {
+  return { match: (sql: string) => sql.includes('SELECT preferences FROM users'), rows: [PREFS_ROW] };
+}
+
+function portfolioRule(totalBalance: number) {
+  return { match: (sql: string) => sql.includes('FROM portfolio'), rows: [{ total_balance: totalBalance }] };
+}
+
+function strategyReportRule(rows: unknown[]) {
+  return { match: (sql: string) => sql.includes('FROM strategy_reports'), rows };
+}
+
 const executionCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
 function testEnv(db: FakeD1): Env {
@@ -64,5 +93,71 @@ describe('POST /api/portfolio/deposit', () => {
     expect(json.success).toBe(true);
     expect(json.data.safe_added).toBe(1000);
     expect(json.data.ambition_added).toBe(0);
+  });
+});
+
+describe('GET /api/portfolio trigger line resolution', () => {
+  type TriggerStatus = { current_balance: number; trigger_line: number; status: 'accumulating' | 'triggerable' };
+
+  async function getTriggerStatus(db: FakeD1): Promise<TriggerStatus> {
+    const res = await portfolioRouter.request('/', {
+      method: 'GET',
+      headers: SESSION_COOKIE,
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { success: boolean; data: { trigger_status: TriggerStatus } };
+    return json.data.trigger_status;
+  }
+
+  it('uses the evolved trigger_line and shows accumulating below it (1700 between 1667 and 2000)', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      preferencesRule(),
+      portfolioRule(1700),
+      strategyReportRule([evolvedTriggerStrategyRow(2000)]),
+    ]);
+
+    const status = await getTriggerStatus(db);
+    expect(status.trigger_line).toBe(2000);
+    expect(status.status).toBe('accumulating');
+  });
+
+  it('flips to triggerable at the evolved boundary', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      preferencesRule(),
+      portfolioRule(2200),
+      strategyReportRule([evolvedTriggerStrategyRow(2000)]),
+    ]);
+
+    const status = await getTriggerStatus(db);
+    expect(status.trigger_line).toBe(2000);
+    expect(status.status).toBe('triggerable');
+  });
+
+  it('falls back to 1667 and turns triggerable when evolved params are stale', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      preferencesRule(),
+      portfolioRule(1700),
+      strategyReportRule([evolvedTriggerStrategyRow(2000, { staleDays: 46 })]),
+    ]);
+
+    const status = await getTriggerStatus(db);
+    expect(status.trigger_line).toBe(1667);
+    expect(status.status).toBe('triggerable');
+  });
+
+  it('falls back to 1667 when evolved params are PBO-rejected', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      preferencesRule(),
+      portfolioRule(1500),
+      strategyReportRule([evolvedTriggerStrategyRow(2000, { pboScore: 0.7 })]),
+    ]);
+
+    const status = await getTriggerStatus(db);
+    expect(status.trigger_line).toBe(1667);
+    expect(status.status).toBe('accumulating');
   });
 });

@@ -22,13 +22,12 @@ function isMeResponse(obj: unknown): obj is { user: User } {
   );
 }
 
-// 类型守卫：验证 /auth/otp/verify 的完整 AuthSession 响应
-function isAuthSessionData(obj: unknown): obj is { user: User; token: string; expires_at: string } {
+// 类型守卫：验证 /auth/otp/verify 的响应（token 仅经 HttpOnly cookie 传输，不出现在响应体中）
+function isAuthSessionData(obj: unknown): obj is { user: User; expires_at: string } {
   if (!obj || typeof obj !== 'object') return false;
   const o = obj as Record<string, unknown>;
   return (
     'user' in o && typeof o.user === 'object' && o.user !== null &&
-    'token' in o && typeof o.token === 'string' &&
     'expires_at' in o && typeof o.expires_at === 'string'
   );
 }

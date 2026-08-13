@@ -3,6 +3,10 @@ transaction_costs:
   etf_min_yuan: 5         # 单笔最低佣金 5 元（默认不免五元）；若券商免五元可改为 0
   mmf_bps: 0              # 货币基金（511360/511880）成本约等于零，申赎无佣金
 
+dca:
+  monthly_contribution: 1000   # 每月定投金额（元），进入资金池后在安全层生息
+  contribution_freq_days: 21   # 定投间隔（交易日 ≈ 一个月）
+
 regime:
   lookback_months: 3      # 滚动特征窗口（月），用于计算 3M 收益/波动
   n_states: 3             # 固定 3 状态：牛市/震荡/熊市

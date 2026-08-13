@@ -19,6 +19,7 @@ version = "0.1.0"
 description = "Alpha-Life Engine — Quantitative Strategy Evolver"
 requires-python = ">=3.13"
 dependencies = [
+    "baostock>=0.8,<1",
     "torch>=2.12,<3",
     "numpy>=2.5,<3",
     "pandas>=3.0,<4",

@@ -81,7 +81,7 @@ class StrategyParameterSet:
     ma_short_window: int = 20
     ma_long_window: int = 60
     safe_allocation: dict[str, float] = field(
-        default_factory=lambda: {"511360": 0.8, "511880": 0.2}
+        default_factory=lambda: {"000012": 0.8, "000013": 0.2}
     )
     ambition_allocation: dict[str, float] = field(
         default_factory=lambda: {"000300": 0.4, "000905": 0.4, "000922": 0.2}
@@ -97,7 +97,7 @@ class StrategyParameterBounds:
     ma_short_window: tuple[int, int] = (5, 50)
     ma_long_window: tuple[int, int] = (20, 200)
     safe_allocation: dict[str, tuple[float, float]] = field(
-        default_factory=lambda: {"511360": (0, 1), "511880": (0, 1)}
+        default_factory=lambda: {"000012": (0, 1), "000013": (0, 1)}
     )
     ambition_allocation: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {"000300": (0, 1), "000905": (0, 1), "000922": (0, 1)}
@@ -194,6 +194,14 @@ class TransactionCostConfig:
 
 
 @dataclass
+class DcaConfig:
+    """DCA 定投模拟配置（config.yaml `dca:` 为单一事实来源）。"""
+
+    monthly_contribution: float = 1000.0  # 每月定投金额（元）
+    contribution_freq_days: int = 21  # 定投间隔（交易日）
+
+
+@dataclass
 class EvolverConfig:
     cpcv_splits: int = 10
     cpcv_test_size: float = 0.2
@@ -215,6 +223,7 @@ class EvolverConfig:
     transaction_costs: TransactionCostConfig = field(
         default_factory=TransactionCostConfig
     )
+    dca: DcaConfig = field(default_factory=DcaConfig)
 
 
 DEFAULT_EVOLVER_CONFIG = EvolverConfig()
@@ -327,6 +336,7 @@ class DriftResult:
 class StrategyReportData:
     timestamp: str = ""
     config: EvolverConfig = field(default_factory=EvolverConfig)
+    evolution_seed: int | None = None
     efficient_frontier: EfficientFrontier = field(default_factory=EfficientFrontier)
     monte_carlo_result: MonteCarloResult = field(default_factory=MonteCarloResult)
     walk_forward_summary: WalkForwardSummary = field(default_factory=WalkForwardSummary)

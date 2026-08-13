@@ -8,7 +8,7 @@ interface Props {
 
 export default function TriggerProgress({ currentBalance, triggerLine, status }: Props) {
   const shouldReduceMotion = useReducedMotion() ?? false;
-  const percentage = Math.min((currentBalance / triggerLine) * 100, 100);
+  const percentage = triggerLine > 0 ? Math.min((currentBalance / triggerLine) * 100, 100) : 0;
 
   return (
     <motion.div
@@ -19,11 +19,11 @@ export default function TriggerProgress({ currentBalance, triggerLine, status }:
     >
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">1667 元触发线</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{triggerLine} 元触发线</h2>
           <p className="text-sm text-gray-500 mt-1">{status === 'triggerable' ? '已达到触发条件' : '累计中...'}</p>
         </div>
         <p className="text-2xl font-bold text-gray-900">
-          ¥{currentBalance.toFixed(2)}<span className="text-sm font-normal text-gray-400"> / ¥{triggerLine}</span>
+          ¥{currentBalance.toFixed(2)}<span className="text-sm font-normal text-gray-400"> / ¥{triggerLine.toFixed(2)}</span>
         </p>
       </div>
       <div className="relative h-4 bg-gray-200 rounded-full overflow-hidden">

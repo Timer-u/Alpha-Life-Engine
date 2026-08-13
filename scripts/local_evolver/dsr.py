@@ -199,11 +199,15 @@ def block_bootstrap(
     returns: np.ndarray,
     n_resamples: int = 1000,
     block_size: int = 5,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """Block bootstrap：保留时间序列短期自相关结构。"""
     n = len(returns)
     if n <= block_size:
-        indices = np.random.randint(0, n, size=(n_resamples, n))
+        if rng is None:
+            indices = np.random.randint(0, n, size=(n_resamples, n))
+        else:
+            indices = rng.integers(0, n, size=(n_resamples, n))
         return returns[indices]
 
     n_blocks = int(np.ceil(n / block_size))
@@ -211,7 +215,10 @@ def block_bootstrap(
 
     sampled_indices = []
     for _ in range(n_resamples):
-        chosen_blocks = np.random.choice(block_starts, size=n_blocks, replace=True)
+        if rng is None:
+            chosen_blocks = np.random.choice(block_starts, size=n_blocks, replace=True)
+        else:
+            chosen_blocks = rng.choice(block_starts, size=n_blocks, replace=True)
         idxs = np.concatenate([
             np.arange(start, min(start + block_size, n)) for start in chosen_blocks
         ])
@@ -225,6 +232,7 @@ def bootstrap_ci(
     block_size: int = 5,
     levels: list[float] | None = None,
     risk_free_rate: float = 0.0,
+    rng: np.random.Generator | None = None,
 ) -> dict:
     """Bootstrap 置信区间（Sharpe / Sortino / MaxDD）。
     返回各指标的 mean, std, ci_95, ci_99。
@@ -232,7 +240,7 @@ def bootstrap_ci(
     if levels is None:
         levels = [0.95, 0.99]
 
-    boot = block_bootstrap(returns, n_resamples, block_size)
+    boot = block_bootstrap(returns, n_resamples, block_size, rng=rng)
 
     sharpes = np.array([compute_sharpe_ratio(b, risk_free_rate) for b in boot])
     sortinos = np.array([compute_sortino_ratio(b, risk_free_rate) for b in boot])

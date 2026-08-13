@@ -43,8 +43,8 @@ echo    - 前端应用: http://localhost:3000
 echo    - 数据库: alpha-life-dev (本地 D1)
 echo.
 
-echo 🚀 启动后端服务器 (wrangler pages dev)...
-start cmd /k "wrangler pages dev dist --d1 DB=a491d7ba-045d-4303-a10b-ae25591e8164 --port 8787"
+echo 🚀 启动后端服务器 (wrangler dev)...
+start cmd /k "wrangler dev --port 8787"
 
 timeout /t 5 /nobreak
 
