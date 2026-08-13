@@ -177,7 +177,7 @@ def test_all_six_params_affect_score(sample_market_data, sample_params):
         dataclasses.replace(base, ma_short_window=base.ma_short_window + 5),
         dataclasses.replace(base, ma_long_window=base.ma_long_window + 20),
         dataclasses.replace(base, safe_ratio=0.55, ambition_ratio=0.45),
-        dataclasses.replace(base, safe_allocation={"000012": 0.5, "000013": 0.5}),
+        dataclasses.replace(base, safe_allocation={"511880": 0.5, "511990": 0.5}),
     ]
     for variant in variants:
         score = score_parameter_set(
@@ -188,6 +188,9 @@ def test_all_six_params_affect_score(sample_market_data, sample_params):
             variant,
             cost_config=cost,
             dca_config=dca,
+        )
+        assert np.isfinite(score), (
+            f"parameter variant produced non-finite score: {variant}"
         )
         assert score != base_score, f"parameter variant had no effect: {variant}"
 
