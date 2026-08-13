@@ -1,184 +1,223 @@
 #!/usr/bin/env node
 /**
  * Daily market data update script.
- * Fetches latest quotes via BaoStock (Python), generates INSERT SQL,
+ * Fetches latest quotes via AKShare Sina (Python), generates INSERT SQL,
  * and imports into Cloudflare D1 via wrangler.
  *
  * Usage:
- *   npm run market:update             # development (--local)
- *   npm run market:update -- --prod   # production (--remote)
+ *   npm run market:update              # development (default)
+ *   npm run market:update -- --local   # development
+ *   npm run market:update -- --dev     # development
+ *   npm run market:update -- --prod    # production (--remote)
+ *
+ * Data source: AKShare Sina (fund_etf_hist_sina). Per-symbol start dates come
+ * from the D1 high-water mark; symbols without rows fall back to full history.
+ * Unknown flags are rejected loudly (never silently ignored).
  */
 
 import { execSync } from 'child_process';
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
+import { createAkshareFetchScript } from './akshare-fetch';
+import {
+  asiaShanghaiToday,
+  baoCodeToCsvName,
+  isAsiaShanghaiWeekday,
+  resolvePythonCommand,
+  shiftDate,
+  symbolFromCode,
+  TRACKED_SYMBOLS,
+} from './symbols';
+
 const __filename = fileURLToPath(import.meta.url);
 
-const TRACKED_ETFS = [
-  { code: 'sh.511360', name: 'Haitong Short-Term Bond ETF', layer: 'safe' },
-  { code: 'sh.511880', name: 'Yinhua Rili Money Market', layer: 'safe' },
-  { code: 'sh.000300', name: 'CSI 300 Index', layer: 'ambition' },
-  { code: 'sh.000905', name: 'CSI 500 Index', layer: 'ambition' },
-  { code: 'sh.000922', name: 'CSI Dividend Index', layer: 'ambition' },
-];
+const FULL_HISTORY_START = '1990-01-01';
+const HIGH_WATER_OVERLAP_DAYS = 5;
 
-function parseArgs(): { env: 'development' | 'production'; dbName: string } {
+const PROD_FLAGS = ['--prod', '--production', '-p'] as const;
+const DEV_FLAGS = ['--local', '--dev', '--development'] as const;
+
+type Env = 'development' | 'production';
+
+interface CliOptions {
+  env: Env;
+  dbName: string;
+}
+
+interface MarketRow {
+  symbol: string;
+  date: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number;
+}
+
+interface PythonSummary {
+  count: number;
+  symbols: string[];
+  failures?: string[];
+  error?: string;
+}
+
+function parseArgs(): CliOptions {
   const args = process.argv.slice(2);
-  const isProd = args.includes('--prod') || args.includes('--production') || args.includes('-p');
-  const env = isProd ? 'production' : 'development';
+  const knownFlags = new Set<string>([...PROD_FLAGS, ...DEV_FLAGS]);
+  const unknown = args.filter(flag => !knownFlags.has(flag));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown flag(s): ${unknown.join(', ')}\n` +
+        `Usage: tsx scripts/daily-market-update.ts [--local|--dev|--development|--prod|--production|-p]`
+    );
+  }
+  const isProd = PROD_FLAGS.some(flag => args.includes(flag));
+  const env: Env = isProd ? 'production' : 'development';
   const dbKey = isProd ? 'D1_PROD_NAME' : 'D1_DEV_NAME';
   const defaultName = isProd ? 'alpha-life-prod' : 'alpha-life-dev';
   const dbName = process.env[dbKey] ?? defaultName;
   return { env, dbName };
 }
 
-function checkPythonDeps(): void {
+/**
+ * Per-symbol last stored date from D1 (`MAX(date) GROUP BY symbol`).
+ * Empty map means "no history yet" -> full-history fallback for every symbol.
+ */
+function queryHighWaterMarks(dbName: string, env: Env): Record<string, string> {
+  const flag = env === 'development' ? '--local' : '--remote';
+  const cmd =
+    `wrangler d1 execute ${dbName} --command=` +
+    `"SELECT symbol, MAX(date) AS max_date FROM market_data GROUP BY symbol" --json ${flag}`;
   try {
-    execSync('python -c "import baostock, pandas"', { stdio: 'ignore' });
-  } catch {
-    try {
-      execSync('python3 -c "import baostock, pandas"', { stdio: 'ignore' });
-    } catch {
-      console.error('ERROR: baostock or pandas not installed. Run: pip install baostock pandas');
-      process.exit(1);
+    const stdout = execSync(cmd, { encoding: 'utf8', timeout: 120000 }).trim();
+    const parsed = JSON.parse(stdout) as
+      | { result?: Array<{ results?: Array<{ symbol?: string; max_date?: string }> }> }
+      | Array<{ results?: Array<{ symbol?: string; max_date?: string }> }>;
+    const executions = Array.isArray(parsed) ? parsed : parsed.result;
+    const rows = executions?.[0]?.results ?? [];
+    const marks: Record<string, string> = {};
+    for (const row of rows) {
+      if (row.symbol && row.max_date) marks[row.symbol] = row.max_date;
     }
+    return marks;
+  } catch (error) {
+    console.warn(
+      `  WARN: could not read D1 high-water marks from ${dbName} (${env}); ` +
+        `falling back to full-history fetch for all symbols. ` +
+        `${error instanceof Error ? error.message : String(error)}`
+    );
+    return {};
   }
 }
 
-function createPythonScript(outputDir: string): string {
-  const codesJson = JSON.stringify(TRACKED_ETFS.map(c => [c.code, c.name]));
-  const safeOutDir = JSON.stringify(outputDir);
-  return `
-import baostock as bs, pandas as pd, sys, os, json, time
-from datetime import datetime, timedelta
-
-codes = ${codesJson}
-out_dir = ${safeOutDir}
-start = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
-end = datetime.now().strftime('%Y-%m-%d')
-
-def login_with_retry(retries=3):
-    for attempt in range(retries):
-        try:
-            lg = bs.login()
-            if lg.error_code == '0':
-                return lg
-            print(f"Login failed (attempt {attempt+1}/{retries}): {lg.msg}", file=sys.stderr)
-        except Exception as e:
-            print(f"Login exception (attempt {attempt+1}/{retries}): {e}", file=sys.stderr)
-        time.sleep(2)
-    return None
-
-lg = login_with_retry()
-if lg is None:
-    print(json.dumps({"error": "BaoStock login failed after retries"}))
-    sys.exit(1)
-
-results = []
-for code, name in codes:
-    rs = bs.query_history_k_data_plus(
-        code, 'date,code,open,high,low,close,volume,amount',
-        start_date=start, end_date=end, frequency='d'
-    )
-    if rs.error_code != '0':
-        print(f"Query error for {code}: {rs.error_msg}", file=sys.stderr)
-        continue
-    while (rs.error_code == '0') & rs.next():
-        r = rs.get_row_data()
-        try:
-            results.append({
-                "symbol": r[1].replace("sh.", "").replace("sz.", ""),
-                "date": r[0],
-                "open": float(r[2]) if r[2] else None,
-                "high": float(r[3]) if r[3] else None,
-                "low": float(r[4]) if r[4] else None,
-                "close": float(r[5]) if r[5] else None,
-                "volume": int(r[6]) if r[6] else 0,
-            })
-        except:
-            continue
-
-bs.logout()
-
-df = pd.DataFrame(results)
-for code, name in codes:
-    sym = code.replace("sh.", "").replace("sz.", "")
-    sub = df[df["symbol"] == sym]
-    if not sub.empty:
-        fname = os.path.join(out_dir, f"{code.replace('.', '_')}.csv")
-        sub.to_csv(fname, index=False)
-
-print(json.dumps({"count": len(results), "symbols": list(set(r["symbol"] for r in results))}))
-`;
+/**
+ * Per-symbol fetch window: last stored date minus a small overlap (re-fetch a
+ * few days so late-published bars are caught and re-runs stay idempotent), or
+ * the full-history start when a symbol has no rows yet.
+ */
+function computeWindows(marks: Record<string, string>): Record<string, string> {
+  const windows: Record<string, string> = {};
+  for (const sym of TRACKED_SYMBOLS) {
+    const last = marks[symbolFromCode(sym.code)];
+    windows[sym.code] = last
+      ? shiftDate(last, -HIGH_WATER_OVERLAP_DAYS)
+      : FULL_HISTORY_START;
+  }
+  return windows;
 }
 
-function generateInsertSql(data: Array<{
-  symbol: string; date: string; open: number | null;
-  high: number | null; low: number | null; close: number | null; volume: number;
-}>): string {
+function generateInsertSql(data: MarketRow[]): string {
   const lines: string[] = [
     '-- Alpha-Life Engine Daily Market Data Update',
     `-- Generated: ${new Date().toISOString()}`,
-    ''
+    '',
   ];
   const batchSize = 500;
   for (let i = 0; i < data.length; i += batchSize) {
     const batch = data.slice(i, i + batchSize);
-    const values = batch.map(row =>
-      `('${row.symbol}', '${row.date}', ${row.open ?? 'NULL'}, ${row.high ?? 'NULL'}, ${row.low ?? 'NULL'}, ${row.close ?? 'NULL'}, ${row.volume})`
-    ).join(',');
-    lines.push(`INSERT OR IGNORE INTO market_data (symbol, date, open, high, low, close, volume) VALUES ${values};`);
+    const values = batch
+      .map(
+        row =>
+          `('${row.symbol}', '${row.date}', ${row.open ?? 'NULL'}, ${row.high ?? 'NULL'}, ` +
+          `${row.low ?? 'NULL'}, ${row.close ?? 'NULL'}, ${row.volume})`
+      )
+      .join(',');
+    lines.push(
+      `INSERT OR IGNORE INTO market_data (symbol, date, open, high, low, close, volume) VALUES ${values};`
+    );
   }
   return lines.join('\n');
 }
 
-function execPythonWithRetry(scriptPath: string, args: string[] = []): string {
+function execPythonWithRetry(scriptPath: string): string {
+  const python = resolvePythonCommand();
   const maxAttempts = 2;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return execSync(`python "${scriptPath}" ${args.join(' ')}`, { encoding: 'utf8', timeout: 120000 });
-    } catch {
-      try {
-        return execSync(`python3 "${scriptPath}" ${args.join(' ')}`, { encoding: 'utf8', timeout: 120000 });
-      } catch {
-        if (attempt < maxAttempts) {
-          console.log(`Retry ${attempt}/${maxAttempts} after error...`);
-          continue;
+      return execSync(`${python} "${scriptPath}"`, {
+        encoding: 'utf8',
+        timeout: 300000,
+      }).trim();
+    } catch (error) {
+      const err = error as Error & { stdout?: string; stderr?: string };
+      const stdout = err.stdout ?? '';
+      const stderr = err.stderr ?? '';
+      const lastLine = stdout
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .pop();
+      let detail = stderr.trim();
+      if (lastLine) {
+        try {
+          const summary = JSON.parse(lastLine) as PythonSummary;
+          const failed = summary.failures?.length ? summary.failures.join(', ') : undefined;
+          if (failed) detail = detail ? `${failed} | ${detail}` : failed;
+          if (summary.error) detail = detail ? `${summary.error} | ${detail}` : summary.error;
+        } catch {
+          // last line was not JSON; stderr carries the detail
         }
-        throw new Error(`Python execution failed after ${maxAttempts} attempts`);
       }
+      if (attempt < maxAttempts) {
+        console.log(`  Python attempt ${attempt}/${maxAttempts} failed; retrying...`);
+        continue;
+      }
+      throw new Error(`BaoStock fetch failed: ${detail || 'unknown error'}`, {
+        cause: error,
+      });
     }
   }
-  throw new Error(`Python execution failed after ${maxAttempts} attempts`);
+  throw new Error('BaoStock fetch failed (unreachable)');
 }
 
-function fetchDataViaPython(outputDir: string): Array<{
-  symbol: string; date: string; open: number | null;
-  high: number | null; low: number | null; close: number | null; volume: number;
-}> {
-  const pyScript = createPythonScript(outputDir);
+function fetchDataViaPython(
+  outputDir: string,
+  windows: Record<string, string>
+): MarketRow[] {
+  const pyScript = createAkshareFetchScript(TRACKED_SYMBOLS, windows, outputDir);
   const pyFile = resolve(outputDir, 'daily_update.py');
   writeFileSync(pyFile, pyScript, 'utf8');
 
   console.log('  Fetching latest quotes via BaoStock...');
   const stdout = execPythonWithRetry(pyFile);
 
-  const lines = stdout.trim().split('\n');
-  const lastLine = lines[lines.length - 1];
-  const parsed = JSON.parse(lastLine);
-  if (parsed.error) {
-    throw new Error(`BaoStock error: ${parsed.error}`);
+  const lines = stdout.split('\n');
+  const lastLine = lines[lines.length - 1]?.trim();
+  if (!lastLine) throw new Error('BaoStock Python produced no output');
+  const parsed = JSON.parse(lastLine) as PythonSummary;
+  if (parsed.error) throw new Error(`BaoStock error: ${parsed.error}`);
+  if (parsed.failures?.length) {
+    throw new Error(`BaoStock query failed for symbol(s): ${parsed.failures.join(', ')}`);
   }
 
-  const allData: Array<{
-    symbol: string; date: string; open: number | null;
-    high: number | null; low: number | null; close: number | null; volume: number;
-  }> = [];
-
-  for (const etf of TRACKED_ETFS) {
-    const csvFile = resolve(outputDir, `${etf.code.replace('.', '_')}.csv`);
+  const allData: MarketRow[] = [];
+  const returnedSymbols = new Set(parsed.symbols);
+  for (const sym of TRACKED_SYMBOLS) {
+    const bare = symbolFromCode(sym.code);
+    if (!returnedSymbols.has(bare)) continue;
+    const csvFile = resolve(outputDir, `${baoCodeToCsvName(sym.code)}.csv`);
     if (!existsSync(csvFile)) continue;
 
     const csv = readFileSync(csvFile, 'utf8');
@@ -210,9 +249,8 @@ function fetchDataViaPython(outputDir: string): Array<{
   });
 }
 
-function importToD1(sqlPath: string, env: 'development' | 'production', dbName: string): void {
-  const isLocal = env === 'development';
-  const flag = isLocal ? '--local' : '--remote';
+function importToD1(sqlPath: string, env: Env, dbName: string): void {
+  const flag = env === 'development' ? '--local' : '--remote';
   const cmd = `wrangler d1 execute ${dbName} --file="${sqlPath}" ${flag}`;
   console.log(`  Writing to ${dbName} (${env})...`);
   execSync(cmd, { stdio: 'inherit', cwd: process.cwd(), timeout: 300000 });
@@ -225,8 +263,6 @@ export async function dailyMarketUpdate(): Promise<void> {
   console.log('='.repeat(50));
   console.log('');
 
-  checkPythonDeps();
-
   const { env, dbName } = parseArgs();
   const outputDir = resolve(process.cwd(), 'data/market_data');
   mkdirSync(outputDir, { recursive: true });
@@ -234,10 +270,38 @@ export async function dailyMarketUpdate(): Promise<void> {
   const startTime = Date.now();
 
   try {
-    console.log('Step 1: Fetch BaoStock data');
-    const data = fetchDataViaPython(outputDir);
+    console.log(`  Date (Asia/Shanghai): ${asiaShanghaiToday()}  ` +
+      `weekday: ${isAsiaShanghaiWeekday()}  env: ${env}  db: ${dbName}`);
+    console.log(`  Symbols: ${TRACKED_SYMBOLS.map(s => s.code).join(', ')}`);
+    console.log('');
+
+    console.log('Step 1: Determine per-symbol fetch windows (D1 high-water marks)');
+    const marks = queryHighWaterMarks(dbName, env);
+    const windows = computeWindows(marks);
+    for (const sym of TRACKED_SYMBOLS) {
+      const bare = symbolFromCode(sym.code);
+      const last = marks[bare];
+      console.log(
+        last
+          ? `     ${sym.code} (${sym.name}): last stored ${last}, fetch from ${windows[sym.code]}`
+          : `     ${sym.code} (${sym.name}): no rows yet, full-history from ${windows[sym.code]}`
+      );
+    }
+    console.log('');
+
+    console.log('Step 2: Fetch BaoStock data');
+    const data = fetchDataViaPython(outputDir, windows);
+
     if (data.length === 0) {
-      console.log('   No new data, update skipped');
+      if (isAsiaShanghaiWeekday()) {
+        throw new Error(
+          'No new market data for any tracked symbol on an Asia/Shanghai weekday. ' +
+            'Expected on Chinese market holidays (CNY, National Day, etc.), but a real trading ' +
+            'calendar is P1/out of scope so an empty weekday result is treated as a failure. ' +
+            'If today is a trading day, BaoStock or the pipeline is down.'
+        );
+      }
+      console.log('   No new data (Asia/Shanghai weekend — market closed, expected). Update skipped.');
       console.log('');
       console.log('='.repeat(50));
       console.log('Update completed (no changes)');
@@ -245,16 +309,16 @@ export async function dailyMarketUpdate(): Promise<void> {
     }
     console.log('');
 
-    console.log('Step 2: Generate SQL');
+    console.log('Step 3: Generate SQL');
     const sql = generateInsertSql(data);
-    const sqlPath = resolve(outputDir, `update_${new Date().toISOString().split('T')[0]}.sql`);
+    const sqlPath = resolve(outputDir, `update_${asiaShanghaiToday()}.sql`);
     writeFileSync(sqlPath, sql, 'utf8');
     console.log(`     SQL file: ${sqlPath}`);
     const insertCount = sql.split('\n').filter(l => l.startsWith('INSERT')).length;
     console.log(`     ${insertCount} INSERT statements`);
     console.log('');
 
-    console.log('Step 3: Import to Cloudflare D1');
+    console.log('Step 4: Import to Cloudflare D1');
     importToD1(sqlPath, env, dbName);
     console.log('');
 
