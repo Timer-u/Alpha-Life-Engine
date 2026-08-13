@@ -15,6 +15,8 @@ describe('symbol universe', () => {
   });
 
   it('has no backtest-proxy role left', () => {
+    // Sentinel: widen SymbolRole to `string[]` so this stays a real guard if a
+    // future refactor ever re-introduces a 'backtest-proxy' role. Do not remove.
     const roles: readonly string[] = TRACKED_SYMBOLS.map(s => s.role);
     expect(roles.every(r => r !== 'backtest-proxy')).toBe(true);
   });
