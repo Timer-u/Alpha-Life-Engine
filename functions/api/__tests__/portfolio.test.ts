@@ -2,7 +2,8 @@ import type { Env } from '../[[route]]';
 
 import { describe, expect, it } from 'vitest';
 
-import { portfolioRouter, splitDeposit } from '../portfolio';
+import { splitDepositCents } from '../../../src/lib/money';
+import { portfolioRouter } from '../portfolio';
 
 import { asD1, FakeD1 } from './helpers/fake-d1';
 
@@ -30,7 +31,10 @@ function preferencesRule() {
 }
 
 function portfolioRule(totalBalance: number) {
-  return { match: (sql: string) => sql.includes('FROM portfolio'), rows: [{ total_balance: totalBalance }] };
+  return {
+    match: (sql: string) => sql.includes('FROM portfolio'),
+    rows: [{ total_balance: totalBalance, safe_layer_balance: Math.round(totalBalance * 0.6), ambition_layer_balance: Math.round(totalBalance * 0.4) }],
+  };
 }
 
 function strategyReportRule(rows: unknown[]) {
@@ -43,31 +47,30 @@ function testEnv(db: FakeD1): Env {
   return { DB: asD1(db), RESEND_API_KEY: '', ENVIRONMENT: 'test', SESSION_DAYS: '7' };
 }
 
-describe('splitDeposit', () => {
+describe('splitDepositCents', () => {
   it('splits amount by safe ratio', () => {
-    expect(splitDeposit(1000, 0.6)).toEqual({ safeAdded: 600, ambitionAdded: 400 });
+    expect(splitDepositCents(100000, 0.6)).toEqual({ safeAddedCents: 60000, ambitionAddedCents: 40000 });
   });
 
   it('splits all to safe layer when ratio is 1', () => {
-    expect(splitDeposit(1000, 1)).toEqual({ safeAdded: 1000, ambitionAdded: 0 });
+    expect(splitDepositCents(100000, 1)).toEqual({ safeAddedCents: 100000, ambitionAddedCents: 0 });
   });
 
   it('splits all to ambition layer when ratio is 0', () => {
-    expect(splitDeposit(1000, 0)).toEqual({ safeAdded: 0, ambitionAdded: 1000 });
+    expect(splitDepositCents(100000, 0)).toEqual({ safeAddedCents: 0, ambitionAddedCents: 100000 });
   });
 
-  it('keeps layer sum exactly equal to the deposit amount', () => {
-    const { safeAdded, ambitionAdded } = splitDeposit(999.99, 0.333);
-    expect(safeAdded + ambitionAdded).toBe(999.99);
+  it('keeps layer sum exactly equal to the deposit amount in cents', () => {
+    const { safeAddedCents, ambitionAddedCents } = splitDepositCents(99999, 0.333);
+    expect(safeAddedCents + ambitionAddedCents).toBe(99999);
   });
 });
 
 describe('POST /api/portfolio/deposit', () => {
   it('clamps an out-of-range evolved safe_ratio (2.0) before splitting', async () => {
     const db = new FakeD1([
-      { match: sql => sql.includes('FROM sessions'), rows: [{ id: 1, token: 'test-token', user_id: 7, expires_at: '2099-01-01', created_at: '', last_active: '', email: 'a@b.c', name: null }] },
-      { match: sql => sql.includes('SELECT preferences FROM users'), rows: [{ preferences: '{"birth_year":1990,"birth_month":6,"birth_day":15}' }] },
-      { match: sql => sql.includes('FROM portfolio'), rows: [{ total_balance: 5000, safe_layer_balance: 3000, ambition_layer_balance: 2000 }] },
+      { match: sql => sql.includes('FROM sessions'), rows: [SESSION_ROW] },
+      { match: sql => sql.includes('SELECT preferences FROM users'), rows: [PREFS_ROW] },
       {
         match: sql => sql.includes('FROM strategy_reports'),
         rows: [{
@@ -77,22 +80,43 @@ describe('POST /api/portfolio/deposit', () => {
           evolution_timestamp: new Date().toISOString(),
         }],
       },
+      { match: sql => sql.includes('UPDATE portfolio'), rows: [{ total_balance: 600000, safe_layer_balance: 600000, ambition_layer_balance: 500000 }] },
+      { match: sql => sql.includes('INSERT INTO deposits'), rows: [{ id: 1 }] },
     ]);
 
     const res = await portfolioRouter.request('/deposit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
-      body: JSON.stringify({ amount: 1000 }),
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: 'deposit-key-001' }),
     }, testEnv(db), executionCtx);
 
     expect(res.status).toBe(200);
     const json = (await res.json()) as {
       success: boolean;
-      data: { safe_added: number; ambition_added: number };
+      data: { duplicate: boolean; safe_added_cents: number; ambition_added_cents: number };
     };
     expect(json.success).toBe(true);
-    expect(json.data.safe_added).toBe(1000);
-    expect(json.data.ambition_added).toBe(0);
+    expect(json.data.duplicate).toBe(false);
+    expect(json.data.safe_added_cents).toBe(100000);
+    expect(json.data.ambition_added_cents).toBe(0);
+  });
+
+  it('dedupes a repeated deposit by idempotency key', async () => {
+    const db = new FakeD1([
+      { match: sql => sql.includes('FROM sessions'), rows: [SESSION_ROW] },
+      { match: sql => sql.includes('SELECT preferences FROM users'), rows: [PREFS_ROW] },
+      { match: sql => sql.includes('UPDATE portfolio'), rows: [] },
+      { match: sql => sql.includes('INSERT INTO deposits'), rows: [], changes: 0 },
+      { match: sql => sql.includes('FROM deposits'), rows: [{ amount_cents: 100000 }] },
+    ]);
+    const res = await portfolioRouter.request('/deposit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: 'dup-key-0000001' }),
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { success: boolean; data: { duplicate: boolean } };
+    expect(json.success).toBe(true);
+    expect(json.data.duplicate).toBe(true);
   });
 });
 
@@ -109,16 +133,16 @@ describe('GET /api/portfolio trigger line resolution', () => {
     return json.data.trigger_status;
   }
 
-  it('uses the evolved trigger_line and shows accumulating below it (1700 between 1667 and 2000)', async () => {
+  it('uses the evolved trigger_line (cents) and shows accumulating below it', async () => {
     const db = new FakeD1([
       sessionRule(),
       preferencesRule(),
-      portfolioRule(1700),
+      portfolioRule(170000),
       strategyReportRule([evolvedTriggerStrategyRow(2000)]),
     ]);
 
     const status = await getTriggerStatus(db);
-    expect(status.trigger_line).toBe(2000);
+    expect(status.trigger_line).toBe(200000);
     expect(status.status).toBe('accumulating');
   });
 
@@ -126,38 +150,38 @@ describe('GET /api/portfolio trigger line resolution', () => {
     const db = new FakeD1([
       sessionRule(),
       preferencesRule(),
-      portfolioRule(2200),
+      portfolioRule(220000),
       strategyReportRule([evolvedTriggerStrategyRow(2000)]),
     ]);
 
     const status = await getTriggerStatus(db);
-    expect(status.trigger_line).toBe(2000);
+    expect(status.trigger_line).toBe(200000);
     expect(status.status).toBe('triggerable');
   });
 
-  it('falls back to 1667 and turns triggerable when evolved params are stale', async () => {
+  it('falls back to 166700 cents when evolved params are stale', async () => {
     const db = new FakeD1([
       sessionRule(),
       preferencesRule(),
-      portfolioRule(1700),
+      portfolioRule(170000),
       strategyReportRule([evolvedTriggerStrategyRow(2000, { staleDays: 46 })]),
     ]);
 
     const status = await getTriggerStatus(db);
-    expect(status.trigger_line).toBe(1667);
+    expect(status.trigger_line).toBe(166700);
     expect(status.status).toBe('triggerable');
   });
 
-  it('falls back to 1667 when evolved params are PBO-rejected', async () => {
+  it('falls back to 166700 cents when evolved params are PBO-rejected', async () => {
     const db = new FakeD1([
       sessionRule(),
       preferencesRule(),
-      portfolioRule(1500),
+      portfolioRule(150000),
       strategyReportRule([evolvedTriggerStrategyRow(2000, { pboScore: 0.7 })]),
     ]);
 
     const status = await getTriggerStatus(db);
-    expect(status.trigger_line).toBe(1667);
+    expect(status.trigger_line).toBe(166700);
     expect(status.status).toBe('accumulating');
   });
 });
