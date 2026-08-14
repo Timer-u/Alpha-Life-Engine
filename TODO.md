@@ -57,20 +57,31 @@
 
 - ~~卖出摩擦弹窗 / 月度对账页 / 邮件通知 / 双层账户仪表盘 / 资金池 LCH 切分 / ErrorBoundary·Toast·骨架 / 前端动效优化~~
 
+### P1 资金与安全正确性（2026-08-14，整数分重构 0e39ee4..全套落地）
+
+- ~~**金额统一整数分存储与计算**~~ — 全链路改整数分：`Transaction.commission`/`amount`、`Portfolio` 各余额均为整数分；展示层再除 100。佣金 `COMMISSION_MIN_CENTS=500` 整数计算
+- ~~**佣金口径不一致**~~ — `avg_price` 与 `invested` 均改为含佣口径（integer cents），持仓成本与累计投入对齐
+- ~~**买入补偿是第二笔非原子 batch**~~ — 守卫条件并入同一 batch，消除两 batch 间崩溃的"幽灵交易"
+- ~~**充值无幂等/lost-update 竞态**~~ — 充值改为原子幂等入账，消除并发/双击重复入账
+- ~~**`PUT /portfolio` 无校验**~~ — 移除无校验的 `PUT /api/portfolio`（无调用方，破坏性变更已记录）
+- ~~**trigger 接口信任客户端余额**~~ — 服务端用 `portfolio.total_balance` 覆盖客户端 `current_balance`，trigger 引擎改整数分运算
+- ~~**交易日期按 UTC 分组**~~ — 落库/分组改用 Asia/Shanghai 交易日（`tradeDateShanghai`），performance/reconciliation 统一
+- ~~**无已实现盈亏落库**~~ — 卖出计入 `realized_pnl`（整数分），新增 backfill 脚本 `backfill-realized-pnl`
+
 ## 待办（按优先级分级）
 
 > 分级口径：**P1** = 账目正确性或决策质量直接受损（钱错了 / 回测结论不可信）；**P2** = 工程与运维缺口（含 ⚡ 单点小改动，可随时顺手修）；**P3** = 体验与长期债。路线图见文末。
 
 ### P1 资金与安全正确性
 
-- [ ] **金额统一整数分存储与计算**：全库浮点 `round2` 累加误差（`portfolio.ts`、`transaction.ts`、`performance.ts`）；佣金 `Math.max(amount*0.0003, 5)` 尤险。展示层再除 100
-- [ ] **佣金口径不一致**：`avg_price` 不含佣金（`transaction.ts:137-140`）但 `invested` 含佣金（`performance.ts:47`）→ 持仓成本与累计投入对不上
-- [ ] **买入补偿是第二笔非原子 batch**（`transaction.ts:216-244`）：两 batch 之间崩溃留"幽灵交易"。守卫条件并入同一 batch 或加幂等/重试
-- [ ] **充值无幂等/lost-update 竞态**（`portfolio.ts:241-262`）：先 SELECT 再 UPDATE，并发/双击重复入账。加乐观锁或幂等键
-- [ ] **`PUT /portfolio` 无校验**（`portfolio.ts:288-322`）：可设负余额、`total != safe + ambition`，无审计日志
-- [ ] **trigger 接口信任客户端余额**（`trigger.ts:42-46`）：伪造 `current_balance` 可强制 EXECUTE。服务端用 `portfolio.total_balance` 覆盖
-- [ ] **交易日期按 UTC 分组**（`created_at` UTC vs `market_data.date` 北京交易日错位）：落库/分组改用 Asia/Shanghai
-- [ ] **无已实现盈亏落库**：卖出不计 realized P&L，无法对账审计
+- ~~**金额统一整数分存储与计算**~~：全库浮点 `round2` 累加误差（`portfolio.ts`、`transaction.ts`、`performance.ts`）；佣金 `Math.max(amount*0.0003, 5)` 尤险。展示层再除 100
+- ~~**佣金口径不一致**~~：`avg_price` 不含佣金（`transaction.ts:137-140`）但 `invested` 含佣金（`performance.ts:47`）→ 持仓成本与累计投入对不上
+- ~~**买入补偿是第二笔非原子 batch**~~（`transaction.ts:216-244`）：两 batch 之间崩溃留"幽灵交易"。守卫条件并入同一 batch 或加幂等/重试
+- ~~**充值无幂等/lost-update 竞态**~~（`portfolio.ts:241-262`）：先 SELECT 再 UPDATE，并发/双击重复入账。加乐观锁或幂等键
+- ~~**`PUT /portfolio` 无校验**~~（`portfolio.ts:288-322`）：可设负余额、`total != safe + ambition`，无审计日志
+- ~~**trigger 接口信任客户端余额**~~（`trigger.ts:42-46`）：伪造 `current_balance` 可强制 EXECUTE。服务端用 `portfolio.total_balance` 覆盖
+- ~~**交易日期按 UTC 分组**~~（`created_at` UTC vs `market_data.date` 北京交易日错位）：落库/分组改用 Asia/Shanghai
+- ~~**无已实现盈亏落库**~~：卖出不计 realized P&L，无法对账审计
 
 ### P1 回测方法学（决策质量）
 
