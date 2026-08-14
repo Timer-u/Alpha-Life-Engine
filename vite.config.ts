@@ -30,7 +30,7 @@ export default defineConfig({
     global: 'globalThis',
   },
   test: {
-    include: ['functions/**/*.test.ts', 'scripts/**/*.test.ts'],
+    include: ['functions/**/*.test.ts', 'scripts/**/*.test.ts', 'src/**/*.test.ts'],
     environment: 'node',
   },
 })
