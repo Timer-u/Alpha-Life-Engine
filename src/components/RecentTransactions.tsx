@@ -2,6 +2,8 @@ import type { Transaction } from '../types/api';
 
 import { motion, useReducedMotion } from 'motion/react';
 
+import { formatCents } from '../lib/money';
+
 interface Props { transactions: Transaction[]; }
 
 export default function RecentTransactions({ transactions }: Props) {
@@ -40,6 +42,7 @@ export default function RecentTransactions({ transactions }: Props) {
               <th className="text-right py-2 px-3 text-gray-500 font-medium">价格</th>
               <th className="text-right py-2 px-3 text-gray-500 font-medium">金额</th>
               <th className="text-right py-2 px-3 text-gray-500 font-medium">佣金</th>
+              <th className="text-right py-2 px-3 text-gray-500 font-medium">盈亏</th>
               <th className="text-left py-2 px-3 text-gray-500 font-medium">层级</th>
             </tr>
           </thead>
@@ -47,6 +50,7 @@ export default function RecentTransactions({ transactions }: Props) {
             {transactions.map((tx, index) => {
               const typeClassName = tx.transaction_type === 'buy' ? 'bg-success-50 text-success-600' : 'bg-danger-50 text-danger-600';
               const layerClassName = tx.layer === 'safe' ? 'text-success-600' : 'text-primary-600';
+              const pnlClassName = (tx.realized_pnl ?? 0) >= 0 ? 'text-success-600' : 'text-danger-600';
               return (
                 <motion.tr
                   key={tx.id}
@@ -62,8 +66,13 @@ export default function RecentTransactions({ transactions }: Props) {
                   <td className="py-2 px-3 text-gray-900 font-mono">{tx.symbol}</td>
                   <td className="py-2 px-3 text-right text-gray-900">{tx.shares.toFixed(3)}</td>
                   <td className="py-2 px-3 text-right text-gray-900">¥{tx.price.toFixed(2)}</td>
-                  <td className="py-2 px-3 text-right text-gray-900">¥{tx.amount.toFixed(2)}</td>
-                  <td className="py-2 px-3 text-right text-gray-500">¥{tx.commission.toFixed(2)}</td>
+                  <td className="py-2 px-3 text-right text-gray-900">{formatCents(tx.amount)}</td>
+                  <td className="py-2 px-3 text-right text-gray-500">{formatCents(tx.commission)}</td>
+                  <td className="py-2 px-3 text-right text-gray-900">
+                    {tx.realized_pnl === null || tx.realized_pnl === undefined
+                      ? <span className="text-gray-400">—</span>
+                      : <span className={'font-medium ' + pnlClassName}>{formatCents(tx.realized_pnl)}</span>}
+                  </td>
                   <td className="py-2 px-3">
                     <span className={'text-xs ' + layerClassName}>
                       {tx.layer === 'safe' ? '安全层' : '进取层'}

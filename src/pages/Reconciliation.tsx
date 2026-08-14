@@ -8,6 +8,7 @@ import { Link } from 'react-router';
 import { useAuth } from '../hooks/useAuth';
 import { useReconciliation } from '../hooks/useReconciliation';
 import { useToast } from '../hooks/useToast';
+import { formatCents, yuanToCents } from '../lib/money';
 
 function currentMonth(): string {
   return new Date().toISOString().slice(0, 7);
@@ -52,10 +53,10 @@ export default function Reconciliation() {
     try {
       const res = await create({
         reconciliation_date: month,
-        broker_balance: broker,
-        deposits: deposits ? parseFloat(deposits) : undefined,
-        withdrawals: withdrawals ? parseFloat(withdrawals) : undefined,
-        fees: fees ? parseFloat(fees) : undefined,
+        broker_balance: yuanToCents(broker),
+        deposits: deposits ? yuanToCents(parseFloat(deposits)) : undefined,
+        withdrawals: withdrawals ? yuanToCents(parseFloat(withdrawals)) : undefined,
+        fees: fees ? yuanToCents(parseFloat(fees)) : undefined,
         notes: notes || undefined,
       });
       setResult(res);
@@ -148,14 +149,14 @@ export default function Reconciliation() {
               <motion.div key="result" className={resultClassName} initial={{ opacity: 0, height: 0, y: shouldReduceMotion ? 0 : -6 }} animate={{ opacity: 1, height: 'auto', y: 0 }} exit={{ opacity: 0, height: 0, y: shouldReduceMotion ? 0 : -6 }} transition={{ duration: shouldReduceMotion ? 0 : 0.24 }}>
                 <h3 className="text-sm font-semibold text-gray-800 mb-3">对账结果</h3>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-y-2 text-sm">
-                  <div><p className="text-gray-500 text-xs">系统现金池</p><p className="font-mono font-medium">¥{result.comparison.system_cash.toFixed(2)}</p></div>
-                  <div><p className="text-gray-500 text-xs">系统持仓市值</p><p className="font-mono font-medium">¥{result.comparison.system_holdings_value.toFixed(2)}</p></div>
-                  <div><p className="text-gray-500 text-xs">系统总资产</p><p className="font-mono font-medium">¥{result.comparison.system_total.toFixed(2)}</p></div>
-                  <div><p className="text-gray-500 text-xs">券商总资产</p><p className="font-mono font-medium">¥{result.comparison.broker_balance.toFixed(2)}</p></div>
+                  <div><p className="text-gray-500 text-xs">系统现金池</p><p className="font-mono font-medium">{formatCents(result.comparison.system_cash)}</p></div>
+                  <div><p className="text-gray-500 text-xs">系统持仓市值</p><p className="font-mono font-medium">{formatCents(result.comparison.system_holdings_value)}</p></div>
+                  <div><p className="text-gray-500 text-xs">系统总资产</p><p className="font-mono font-medium">{formatCents(result.comparison.system_total)}</p></div>
+                  <div><p className="text-gray-500 text-xs">券商总资产</p><p className="font-mono font-medium">{formatCents(result.comparison.broker_balance)}</p></div>
                   <div>
                     <p className="text-gray-500 text-xs">差异</p>
                     <p className={'font-mono font-medium ' + (result.comparison.needs_calibration ? 'text-danger-600' : 'text-success-600')}>
-                      {result.comparison.variance >= 0 ? '+' : ''}{result.comparison.variance.toFixed(2)} ({result.comparison.variance_pct.toFixed(2)}%)
+                      {formatCents(result.comparison.variance, { sign: true })} ({result.comparison.variance_pct.toFixed(2)}%)
                     </p>
                   </div>
                 </div>
@@ -199,9 +200,9 @@ export default function Reconciliation() {
                       return (
                         <motion.tr key={rec.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors" initial={{ opacity: 0, x: shouldReduceMotion ? 0 : 8 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: shouldReduceMotion ? 0 : 0.24, delay: shouldReduceMotion ? 0 : Math.min(index, 8) * 0.04 }}>
                           <td className="py-2 px-3 font-mono text-gray-900">{rec.reconciliation_date}</td>
-                          <td className="py-2 px-3 text-right font-mono text-gray-900">¥{rec.beginning_balance.toFixed(2)}</td>
-                          <td className="py-2 px-3 text-right font-mono text-gray-900">¥{rec.ending_balance.toFixed(2)}</td>
-                          <td className={'py-2 px-3 text-right font-mono ' + varianceClassName}>{rec.variance >= 0 ? '+' : ''}{rec.variance.toFixed(2)}</td>
+                          <td className="py-2 px-3 text-right font-mono text-gray-900">{formatCents(rec.beginning_balance)}</td>
+                          <td className="py-2 px-3 text-right font-mono text-gray-900">{formatCents(rec.ending_balance)}</td>
+                          <td className={'py-2 px-3 text-right font-mono ' + varianceClassName}>{formatCents(rec.variance, { sign: true })}</td>
                           <td className="py-2 px-3 text-right font-mono text-gray-500">{variancePctLabel(rec)}</td>
                           <td className="py-2 px-3"><span className={'inline-flex px-2 py-0.5 rounded text-xs font-medium ' + statusClassName}>{STATUS_BADGES[rec.status].label}</span></td>
                           <td className="py-2 px-3 text-right">

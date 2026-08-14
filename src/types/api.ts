@@ -45,6 +45,8 @@ export const ETF_CONSTANTS = {
 } as const;
 
 // Database Entity Types
+// NOTE: Portfolio money fields (total_balance / safe_layer_balance / ambition_layer_balance)
+// and all money fields below are integer CENTS, not yuan.
 export interface Portfolio {
   id: number;
   user_id: number;
@@ -84,6 +86,8 @@ export interface Transaction {
   layer: LayerType;
   created_at: string;
   notes: string | null;
+  realized_pnl?: number | null;
+  trade_date?: string;
 }
 
 export interface TransactionForm {
@@ -91,6 +95,7 @@ export interface TransactionForm {
   shares: number;
   price: number;
   amount?: number;
+  // commission is in CENTS (TransactionForm converts yuan→cents before calling create)
   commission?: number;
   transaction_type: TransactionType;
   trigger_signal?: string;
@@ -133,6 +138,7 @@ export function isEvolvedParams(a: ActiveAllocation): a is EvolvedParams {
 
 export type ReconciliationStatus = 'PENDING' | 'CONFIRMED' | 'ARCHIVED';
 
+// NOTE: all money fields below are integer CENTS.
 export interface Reconciliation {
   id: number;
   user_id: number;
@@ -150,6 +156,7 @@ export interface Reconciliation {
   updated_at: string;
 }
 
+// NOTE: all money fields below are integer CENTS.
 export interface ReconciliationComparison {
   system_cash: number;
   system_holdings_value: number;
@@ -161,9 +168,10 @@ export interface ReconciliationComparison {
 }
 
 export interface DepositResult {
-  amount: number;
-  safe_added: number;
-  ambition_added: number;
+  duplicate: boolean;
+  amount_cents: number;
+  safe_added_cents: number;
+  ambition_added_cents: number;
   safe_ratio: number;
   ambition_ratio: number;
   allocation_source: 'evolved' | 'lch';
