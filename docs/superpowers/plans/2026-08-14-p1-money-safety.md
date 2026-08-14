@@ -338,19 +338,18 @@ git commit -m "feat(db): migrate money amounts to integer cents; add deposits/au
 
 Global constraint change: in `src/types/api.ts`, add `COMMISSION_MIN_CENTS = 500` to `TRIGGER_CONSTANTS` (this task references it; the type edit lands in Task 7, but add it here so this task compiles).
 
-- [ ] **Step 1: Add constants to TRIGGER_CONSTANTS**
+- [ ] **Step 1: Set TRIGGER_CONSTANTS to final cents form**
 
-In `src/types/api.ts:33-37`, change the block to:
+In `src/types/api.ts:33-37`, change the block to its **final** form (Task 5 no longer edits this — see Step 3 note):
 ```ts
 export const TRIGGER_CONSTANTS = {
-  LINE: 1667 as const,                 // default trigger line, YUAN (evolved params stay yuan)
-  TRIGGER_LINE_DEFAULT_YUAN: 1667 as const,
+  LINE: 166700 as const,               // default trigger line, CENTS
+  TRIGGER_LINE_DEFAULT_YUAN: 1667 as const,  // yuan-side default when an evolved param is missing
   COMMISSION_RATE: 0.0003 as const,
-  COMMISSION_MIN: 5 as const,          // yuan (used only for display/legacy)
   COMMISSION_MIN_CENTS: 500 as const,
 } as const;
 ```
-(`LINE` becomes cents=166700 in Task 5; `TRIGGER_LINE_DEFAULT_YUAN` is the yuan-side default used when an evolved param is missing. `COMMISSION_MIN_CENTS` is added now so this task compiles.)
+This must land here (Task 3) so Task 4's `portfolio.ts` GET handler is correct from its first commit: the non-evolved fallback branch returns `TRIGGER_CONSTANTS.LINE` (already cents) and the evolved branch converts yuan via `yuanToCents(... ?? TRIGGER_LINE_DEFAULT_YUAN)`.
 
 - [ ] **Step 2: Write the failing tests (update + new)**
 
@@ -630,15 +629,8 @@ Expected: FAIL — schema rejects (no `current_balance`) and/or balance is 0 (DE
 
 - [ ] **Step 3: Implement**
 
-`src/types/api.ts`:
-```ts
-export const TRIGGER_CONSTANTS = {
-  LINE: 166700 as const,               // default trigger line, CENTS
-  TRIGGER_LINE_DEFAULT_YUAN: 1667 as const,
-  COMMISSION_RATE: 0.0003 as const,
-  COMMISSION_MIN_CENTS: 500 as const,
-} as const;
-```
+`TRIGGER_CONSTANTS` was already set to the final cents form in Task 3 Step 1 — do NOT re-edit `src/types/api.ts` here; just import and use it.
+
 `src/lib/trigger-engine.ts`:
 - `calculateCommission`: `return Math.max(Math.round(amount * TRIGGER_CONSTANTS.COMMISSION_RATE), TRIGGER_CONSTANTS.COMMISSION_MIN_CENTS);`
 - `trigger_line` resolution (evolved params are yuan, default is cents):
@@ -856,13 +848,14 @@ git commit -m "feat(ui): handle money as integer cents end-to-end; format/conver
 
 - [ ] **Step 1: Write the script**
 
-Model on `scripts/daily-market-update.ts` (`execSync` + `wrangler d1 execute --json` / `--file=`). Follow the `parseArgs` pattern (`--prod` flag).
+Model on `scripts/daily-market-update.ts` (`execSync` + `wrangler d1 execute --json` / `--file=`). Follow the `parseArgs` pattern (`--prod` flag). Use `pathToFileURL` for the CLI guard (ESM: `process.argv[1]` is a path, `import.meta.url` is a `file://` URL — they never string-equal).
 ```ts
 #!/usr/bin/env node
 // Backfill realized_pnl on historical sells and recompute commission-inclusive avg_price.
 import { execSync } from 'child_process';
 import { resolve } from 'path';
 import { writeFileSync } from 'fs';
+import { pathToFileURL } from 'url';
 
 const PROD_FLAGS = ['--prod', '--production', '-p'] as const;
 
@@ -912,7 +905,7 @@ export async function backfillRealizedPnl(): Promise<void> {
   }
 }
 
-if (process.argv[1] === import.meta.url) {
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   backfillRealizedPnl().catch(e => { console.error(e); process.exit(1); });
 }
 ```
