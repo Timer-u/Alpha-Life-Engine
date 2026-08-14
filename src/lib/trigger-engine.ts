@@ -25,8 +25,7 @@ export interface MarketPrices {
 export class TriggerDecisionEngine {
 
   private calculateCommission(amount: number): number {
-    const commission = amount * TRIGGER_CONSTANTS.COMMISSION_RATE;
-    return Math.max(commission, TRIGGER_CONSTANTS.COMMISSION_MIN);
+    return Math.max(Math.round(amount * TRIGGER_CONSTANTS.COMMISSION_RATE), TRIGGER_CONSTANTS.COMMISSION_MIN_CENTS);
   }
 
   private getNextSafeETF(): '511360' | '511880' {
@@ -47,7 +46,9 @@ export class TriggerDecisionEngine {
   ): TriggerResponse {
     const { current_balance, signal_value, signal_type } = input;
 
-    const trigger_line = activeParams && isEvolvedParams(activeParams) ? (activeParams.trigger_line ?? TRIGGER_CONSTANTS.LINE) : TRIGGER_CONSTANTS.LINE;
+    const trigger_line = activeParams && isEvolvedParams(activeParams)
+      ? Math.round((activeParams.trigger_line ?? TRIGGER_CONSTANTS.TRIGGER_LINE_DEFAULT_YUAN) * 100)
+      : TRIGGER_CONSTANTS.LINE;
     const safeRatio = activeParams?.safe_ratio ?? 0.6;
     const ambitionRatio = activeParams?.ambition_ratio ?? 0.4;
     const bsmThreshold = activeParams && isEvolvedParams(activeParams) ? (activeParams.bsm_threshold ?? 1.4) : 1.4;
@@ -60,18 +61,18 @@ export class TriggerDecisionEngine {
 
     if (current_balance < trigger_line) {
       decision = 'DEFER';
-      message = `余额 ${current_balance.toFixed(2)} 元 < 触发线 ${trigger_line} 元，资金留在安全层生息`;
+      message = `余额 ${(current_balance / 100).toFixed(2)} 元 < 触发线 ${(trigger_line / 100).toFixed(2)} 元，资金留在安全层生息`;
     } else if (current_balance >= trigger_line && signal_type === 'SKIP') {
       decision = 'SKIP';
       message = `信号 SKIP，资金留在安全层不执行操作`;
     } else if (current_balance >= trigger_line && signal_type === 'BSM' && signal_value >= bsmThreshold) {
       decision = 'EXECUTE';
       executed_amount = trigger_line;
-      message = `恐慌入场信号 (BSM >= ${bsmThreshold})，执行买入 ${trigger_line} 元`;
+      message = `恐慌入场信号 (BSM >= ${bsmThreshold})，执行买入 ${(trigger_line / 100).toFixed(2)} 元`;
     } else if (current_balance >= trigger_line && (signal_type === 'DOUBLE' || signal_type === 'NORMAL')) {
       decision = 'EXECUTE';
       executed_amount = trigger_line;
-      message = `标准买入信号 (${signal_type})，执行买入 ${trigger_line} 元`;
+      message = `标准买入信号 (${signal_type})，执行买入 ${(trigger_line / 100).toFixed(2)} 元`;
     } else {
       decision = 'DEFER';
       message = `其他条件，资金继续在安全层生息`;

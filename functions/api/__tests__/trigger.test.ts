@@ -23,17 +23,14 @@ function triggerDb(notificationRows: unknown[]): FakeD1 {
     { match: sql => sql.includes('FROM sessions'), rows: [{ id: 1, token: 'test-token', user_id: 7, expires_at: '2099-01-01', created_at: '', last_active: '', email: 'a@b.c', name: null }] },
     { match: sql => sql.includes('SELECT email FROM users'), rows: [{ email: 'a@b.c' }] },
     { match: sql => sql.includes('FROM strategy_reports'), rows: [] },
+    { match: sql => sql.includes('FROM portfolio'), rows: [{ total_balance: 500000 }] },
     { match: sql => sql.includes('FROM market_data'), rows: [{ close: 100 }] },
     { match: sql => sql.includes('INSERT INTO trigger_log'), rows: [] },
     { match: sql => sql.includes('FROM notification_log'), rows: notificationRows },
   ]);
 }
 
-const EXECUTE_BODY = {
-  current_balance: 5000,
-  signal_value: 2.0,
-  signal_type: 'BSM',
-};
+const SERVER_BALANCE_BODY = { signal_value: 2.0, signal_type: 'BSM' };
 
 describe('POST /api/trigger', () => {
   it('skips the execution-suggestion email when one was already sent recently', async () => {
@@ -43,7 +40,7 @@ describe('POST /api/trigger', () => {
       const res = await triggerRouter.request('/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
-        body: JSON.stringify(EXECUTE_BODY),
+        body: JSON.stringify(SERVER_BALANCE_BODY),
       }, testEnv(triggerDb([{ id: 5 }])), ctx);
       await Promise.all(pending);
 
@@ -61,7 +58,7 @@ describe('POST /api/trigger', () => {
       const res = await triggerRouter.request('/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
-        body: JSON.stringify(EXECUTE_BODY),
+        body: JSON.stringify(SERVER_BALANCE_BODY),
       }, testEnv(triggerDb([])), ctx);
       await Promise.all(pending);
 
@@ -70,5 +67,17 @@ describe('POST /api/trigger', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it('uses the server-side portfolio balance and ignores any client balance', async () => {
+    const { ctx, pending } = pendingCtx();
+    const res = await triggerRouter.request('/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify(SERVER_BALANCE_BODY),
+    }, testEnv(triggerDb([])), ctx);
+    await Promise.all(pending);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { success: boolean; data: { decision: string } };
+    expect(json.data.decision).toBe('EXECUTE'); // 500000 cents >= 166700 line, BSM 2.0 >= threshold
   });
 });
