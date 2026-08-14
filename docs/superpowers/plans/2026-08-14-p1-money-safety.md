@@ -30,6 +30,7 @@
 **Files:**
 - Create: `src/lib/money.ts`
 - Test: `src/lib/__tests__/money.test.ts`
+- Modify: `vite.config.ts` (test.include — see Step 2a)
 
 **Interfaces:**
 - Produces:
@@ -41,7 +42,7 @@
 
 - [ ] **Step 1: Write the failing test**
 
-`src/lib/__tests__/money.test.ts`:
+`src/lib/__tests__/money.test.ts`. Note: the repo's `perfectionist/sort-imports` requires a blank line between the `vitest` import group and the `../money` group (see `functions/api/__tests__/lch-utils.test.ts`).
 ```ts
 import { describe, expect, it } from 'vitest';
 import { centsToYuan, formatCents, splitDepositCents, tradeDateShanghai, yuanToCents } from '../money';
@@ -92,6 +93,10 @@ describe('splitDepositCents', () => {
 
 Run: `npx vitest run src/lib/__tests__/money.test.ts`
 Expected: FAIL — module `../money` cannot be resolved.
+
+- [ ] **Step 2a: Make vitest discover src tests**
+
+`vite.config.ts` `test.include` is currently `['functions/**/*.test.ts', 'scripts/**/*.test.ts']` and would silently skip `src/lib/__tests__/`. Change it to `['functions/**/*.test.ts', 'scripts/**/*.test.ts', 'src/**/*.test.ts']` so money.test.ts (and the backfill test in Task 8) run under `npm run test`.
 
 - [ ] **Step 3: Write minimal implementation**
 
