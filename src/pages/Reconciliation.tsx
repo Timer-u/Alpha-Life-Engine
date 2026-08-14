@@ -195,7 +195,7 @@ export default function Reconciliation() {
                   </thead>
                   <tbody>
                     {reconciliations.map((rec, index) => {
-                      const varianceClassName = Math.abs(rec.variance) > 0.005 ? 'text-danger-600' : 'text-gray-500';
+                      const varianceClassName = rec.variance !== 0 ? 'text-danger-600' : 'text-gray-500';
                       const statusClassName = STATUS_BADGES[rec.status].className;
                       return (
                         <motion.tr key={rec.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors" initial={{ opacity: 0, x: shouldReduceMotion ? 0 : 8 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: shouldReduceMotion ? 0 : 0.24, delay: shouldReduceMotion ? 0 : Math.min(index, 8) * 0.04 }}>
