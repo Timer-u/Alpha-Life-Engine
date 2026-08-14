@@ -31,9 +31,10 @@ export interface TriggerResponse {
 }
 
 export const TRIGGER_CONSTANTS = {
-  LINE: 1667 as const,
+  LINE: 166700 as const,               // default trigger line, CENTS
+  TRIGGER_LINE_DEFAULT_YUAN: 1667 as const,  // yuan-side default when an evolved param is missing
   COMMISSION_RATE: 0.0003 as const,
-  COMMISSION_MIN: 5 as const,
+  COMMISSION_MIN_CENTS: 500 as const,
 } as const;
 
 export const ETF_CONSTANTS = {
