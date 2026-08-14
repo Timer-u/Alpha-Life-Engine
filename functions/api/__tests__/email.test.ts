@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { logNotification, wasRecentlyNotified } from '../email';
+import { executionSuggestionEmailHtml, logNotification, wasRecentlyNotified } from '../email';
 
 import { asD1, FakeD1 } from './helpers/fake-d1';
 
@@ -27,5 +27,23 @@ describe('logNotification', () => {
   it('inserts a notification log entry without throwing', async () => {
     const db = notificationDb([]);
     await expect(logNotification(asD1(db), 7, 'strategy_expiry')).resolves.toBeUndefined();
+  });
+});
+
+describe('executionSuggestionEmailHtml', () => {
+  it('displays cents amounts as yuan', () => {
+    const html = executionSuggestionEmailHtml({
+      executedAmount: 166700,
+      safeAmount: 100000,
+      ambitionAmount: 66700,
+      commission: 50,
+      nextSafeEtf: '511360',
+      nextSafeEtfName: '测试ETF',
+      message: '触发条件已满足',
+    });
+    expect(html).toContain('¥1667.00');
+    expect(html).toContain('¥1000.00');
+    expect(html).toContain('¥667.00');
+    expect(html).toContain('¥0.50');
   });
 });
