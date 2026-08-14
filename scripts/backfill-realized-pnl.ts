@@ -17,8 +17,13 @@ function queryRows(dbName: string, remote: boolean): Tx[] {
   return parsed[0]?.results ?? [];
 }
 
-export function replayAndGenerateUpdates(txs: Tx[]): { updates: string[]; perKey: Map<string, { shares: number; avgCents: number }> } {
+export function replayAndGenerateUpdates(txs: Tx[]): {
+  updates: string[];
+  positionUpdates: string[];
+  perKey: Map<string, { shares: number; avgCents: number }>;
+} {
   const updates: string[] = [];
+  const positionUpdates: string[] = [];
   const states = new Map<string, { shares: number; avgCents: number }>();
   for (const tx of txs) {
     const key = `${tx.user_id}|${tx.symbol}|${tx.layer}`;
@@ -35,7 +40,14 @@ export function replayAndGenerateUpdates(txs: Tx[]): { updates: string[]; perKey
     }
     states.set(key, st);
   }
-  return { updates, perKey: states };
+  for (const [key, st] of states) {
+    if (st.shares <= 0) continue;
+    const [userId, symbol, layer] = key.split('|');
+    positionUpdates.push(
+      `UPDATE positions SET avg_price = ${(st.avgCents / 100).toFixed(4)} WHERE user_id = ${userId} AND symbol = '${symbol}' AND layer = '${layer}';`
+    );
+  }
+  return { updates, positionUpdates, perKey: states };
 }
 
 export async function backfillRealizedPnl(): Promise<void> {
@@ -44,11 +56,12 @@ export async function backfillRealizedPnl(): Promise<void> {
   const dbName = isProd ? 'alpha-life-prod' : 'alpha-life-dev';
   console.log(`Backfilling realized_pnl into ${dbName} (${isProd ? 'remote' : 'local'})...`);
   const txs = queryRows(dbName, isProd);
-  const { updates } = replayAndGenerateUpdates(txs);
-  console.log(`  ${txs.length} transactions, ${updates.length} sells to backfill`);
-  if (updates.length > 0) {
+  const { updates, positionUpdates } = replayAndGenerateUpdates(txs);
+  const allUpdates = [...updates, ...positionUpdates];
+  console.log(`  ${txs.length} transactions, ${updates.length} sells to backfill, ${positionUpdates.length} positions to update`);
+  if (allUpdates.length > 0) {
     const sqlPath = resolve(process.cwd(), 'data/backfill_realized_pnl.sql');
-    writeFileSync(sqlPath, updates.join('\n'), 'utf8');
+    writeFileSync(sqlPath, allUpdates.join('\n'), 'utf8');
     execSync(`wrangler d1 execute ${dbName} --file="${sqlPath}" ${isProd ? '--remote' : '--local'}`, { stdio: 'inherit', timeout: 300000 });
   }
 }
