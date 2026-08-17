@@ -125,8 +125,8 @@ def test_weighted_composite_chain_linked_no_entry_jump():
     # 修复后按收益率加权 + 链式复利：新上市标的在其上市日无 t-1 价格 → 被剔除，
     # 组合收益只反映在位标的 → 构造性无跳变。
     all_prices = [
-        np.array([1.0, 1.0, 1.0, 1.0]),          # X：第 0 天就在位
-        np.array([np.nan, np.nan, 5.0, 5.5]),    # Y：第 2 天才上市（价位 5.0）
+        np.array([1.0, 1.0, 1.0, 1.0]),  # X：第 0 天就在位
+        np.array([np.nan, np.nan, 5.0, 5.5]),  # Y：第 2 天才上市（价位 5.0）
     ]
     symbols = ["X", "Y"]
     indices = [0, 1]

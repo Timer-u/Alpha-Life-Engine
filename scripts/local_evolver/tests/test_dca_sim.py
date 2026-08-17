@@ -278,10 +278,24 @@ def test_spread_is_realized_cost_not_ambition_subsidy():
     p = _params()
     dca = _dca(monthly=2000.0)
     out_spread = simulate_dca(
-        flat, flat, prices, p, _cost(bps=0.0, min_yuan=0.0, spread=0.002), dca, 0, length - 1
+        flat,
+        flat,
+        prices,
+        p,
+        _cost(bps=0.0, min_yuan=0.0, spread=0.002),
+        dca,
+        0,
+        length - 1,
     )
     out_flat = simulate_dca(
-        flat, flat, prices, p, _cost(bps=0.0, min_yuan=0.0, spread=0.0), dca, 0, length - 1
+        flat,
+        flat,
+        prices,
+        p,
+        _cost(bps=0.0, min_yuan=0.0, spread=0.0),
+        dca,
+        0,
+        length - 1,
     )
     assert out_spread.num_executions > 0
     assert out_spread.num_executions == out_flat.num_executions

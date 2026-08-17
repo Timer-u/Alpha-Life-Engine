@@ -148,8 +148,12 @@ def _a_b_regime_data() -> MarketDataInput:
 def test_per_fold_frontiers_follow_their_own_train_window():
     data = _a_b_regime_data()
     config = EvolverConfig(frontier_points=10)
-    ef1 = compute_efficient_frontier_on_window(data, ["A", "B"], config, start=0, end=99)
-    ef2 = compute_efficient_frontier_on_window(data, ["A", "B"], config, start=100, end=199)
+    ef1 = compute_efficient_frontier_on_window(
+        data, ["A", "B"], config, start=0, end=99
+    )
+    ef2 = compute_efficient_frontier_on_window(
+        data, ["A", "B"], config, start=100, end=199
+    )
     assert ef1.max_sharpe_portfolio is not None
     assert ef2.max_sharpe_portfolio is not None
     w_a1 = ef1.max_sharpe_portfolio.weights.weights["A"]
@@ -172,7 +176,10 @@ def test_cpcv_reports_latest_fold_frontier_and_oos_per_fold_sharpes():
     )
     assert ef.max_sharpe_portfolio is not None
     # 报告的 frontier = 最新折（test_end=299，train [100,199] 偏好 B）
-    assert ef.max_sharpe_portfolio.weights.weights["B"] > ef.max_sharpe_portfolio.weights.weights["A"]
+    assert (
+        ef.max_sharpe_portfolio.weights.weights["B"]
+        > ef.max_sharpe_portfolio.weights.weights["A"]
+    )
     # 逐折 OOS：fold1 的权重偏好 A，但其 test 窗口 [150,199] A 正在下跌 → 折1 Sharpe 为负；
     # fold2 权重偏好 B，其 test 窗口 [200,299] 两者都平 → ~0。逐折估计必然产生此差异。
     cpcv = ef.max_sharpe_portfolio.cpcv_result
