@@ -2,8 +2,30 @@
 
 import pytest
 from models import MarketDataInput, StrategyParameterSet
-from stability import _perturb_weights, check_stability
+from stability import _perturb_split, _perturb_weights, check_stability
 from walk_forward import BACKTEST_SYMBOLS
+
+
+class TestPerturbSplit:
+    def test_preserves_sum(self):
+        for delta in (0.05, -0.05, 0.2, -0.2):
+            s, a = _perturb_split(0.6, 0.4, delta)
+            assert abs(s + a - 1.0) < 1e-9
+            assert 0.0 <= s <= 1.0
+            assert 0.0 <= a <= 1.0
+
+    def test_shift_direction(self):
+        s, a = _perturb_split(0.6, 0.4, 0.05)
+        assert s == pytest.approx(0.65)
+        assert a == pytest.approx(0.35)
+
+    def test_clamp(self):
+        s, a = _perturb_split(0.95, 0.05, 0.1)
+        assert s == pytest.approx(1.0)
+        assert a == pytest.approx(0.0)
+        s, a = _perturb_split(0.05, 0.95, -0.1)
+        assert s == pytest.approx(0.0)
+        assert a == pytest.approx(1.0)
 
 
 class TestPerturbWeights:
