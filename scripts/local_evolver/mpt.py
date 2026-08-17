@@ -4,15 +4,25 @@ import math
 
 import numpy as np
 import torch
-from cpcv import compute_cpcv_result
-from dsr import annualize_return, annualize_volatility
+from cpcv import apply_fold_to_returns, compute_portfolio_returns
+from dsr import (
+    annualize_return,
+    annualize_volatility,
+    compute_dsr,
+    compute_kurtosis,
+    compute_sharpe_ratio,
+    compute_skewness,
+)
 from models import (
     CpcvFold,
+    CpcvResult,
     EfficientFrontier,
     EvolverConfig,
     FrontierPoint,
     MarketDataInput,
     PortfolioWeights,
+    SharpeDistribution,
+    SharpePercentiles,
 )
 
 DEFAULT_RISK_FREE_RATE = 0.025
@@ -270,6 +280,47 @@ def compute_efficient_frontier_on_window(
     )
 
 
+def _aggregate_cpcv(
+    folds: list[CpcvFold],
+    fold_sharpes: list[float],
+    oos_returns: np.ndarray,
+    alpha: float,
+) -> CpcvResult:
+    """Aggregate per-fold OOS results into a CpcvResult (mirrors cpcv.py)."""
+    mean_sr = float(np.mean(fold_sharpes))
+    std_sr = float(np.std(fold_sharpes, ddof=1)) if len(fold_sharpes) > 1 else 0.0
+
+    dist_skewness = compute_skewness(np.array(fold_sharpes))
+
+    sorted_sr = sorted(fold_sharpes)
+
+    def percentile(p: float) -> float:
+        idx = int(len(sorted_sr) * p)
+        return sorted_sr[max(0, min(idx, len(sorted_sr) - 1))]
+
+    ret_skewness = compute_skewness(oos_returns)
+    ret_kurtosis = compute_kurtosis(oos_returns)
+    dsr = compute_dsr(mean_sr, len(oos_returns), ret_skewness, alpha, ret_kurtosis)
+
+    return CpcvResult(
+        folds=folds,
+        fold_sharpe_ratios=fold_sharpes,
+        sharpe_distribution=SharpeDistribution(
+            mean=mean_sr,
+            std=std_sr,
+            skewness=dist_skewness,
+            percentiles=SharpePercentiles(
+                p5=percentile(0.05),
+                p25=percentile(0.25),
+                p50=percentile(0.50),
+                p75=percentile(0.75),
+                p95=percentile(0.95),
+            ),
+        ),
+        dsr=dsr,
+    )
+
+
 def compute_efficient_frontier_with_cpcv(
     data: MarketDataInput,
     symbols: list[str],
@@ -278,12 +329,18 @@ def compute_efficient_frontier_with_cpcv(
     risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
     alpha: float = 0.05,
 ) -> EfficientFrontier:
-    """Frontier estimated inside the most-recent fold's train window only.
+    """Per-fold CPCV frontiers with out-of-sample evaluation.
 
-    Mean/covariance statistics are estimated on the training segment of the
-    fold whose test window ends most recently ("data available as of now"),
-    so the chosen weights never see future data. The max-sharpe weights are
-    then evaluated out-of-sample across ALL folds via compute_cpcv_result.
+    Each fold re-estimates its own frontier on that fold's TRAIN window only
+    (inclusive convention ``returns[train_start : train_end + 1]``), so a
+    fold's test window never leaks into its own weights. The max-sharpe
+    weights are then evaluated on the SAME fold's test window — out of sample
+    by construction. The per-fold OOS return series are concatenated into the
+    reported DSR/Sharpe distribution.
+
+    The REPORTED frontier is the latest fold's (max test_end) estimation —
+    the report consumes its weights, and ``max_sharpe_portfolio.cpcv_result``
+    carries the aggregated per-fold OOS statistics.
     """
     if config is None:
         from models import DEFAULT_EVOLVER_CONFIG
@@ -296,26 +353,52 @@ def compute_efficient_frontier_with_cpcv(
         )
 
     report_fold = max(folds, key=lambda f: f.test_end)
-    ef = compute_efficient_frontier_on_window(
-        data,
-        symbols,
-        config,
-        risk_free_rate,
-        start=report_fold.train_start,
-        end=report_fold.train_end,
-    )
-    if not ef.max_sharpe_portfolio:
-        return ef
 
-    cpcv = compute_cpcv_result(
-        data,
-        symbols,
-        ef.max_sharpe_portfolio.weights.weights,
-        folds,
-        risk_free_rate,
-        alpha,
-    )
-    ef.max_sharpe_portfolio.cpcv_result = cpcv
-    ef.max_sharpe_portfolio.sharpe_ratio = cpcv.dsr
-    ef.min_vol_portfolio = min(ef.points, key=lambda p: p.volatility)
-    return ef
+    fold_sharpes: list[float] = []
+    oos_parts: list[np.ndarray] = []
+    report_ef: EfficientFrontier | None = None
+
+    for fold in folds:
+        ef = compute_efficient_frontier_on_window(
+            data,
+            symbols,
+            config,
+            risk_free_rate,
+            start=fold.train_start,
+            end=fold.train_end,
+        )
+        if not ef.max_sharpe_portfolio:
+            continue
+        if fold == report_fold:
+            report_ef = ef
+
+        weights = ef.max_sharpe_portfolio.weights.weights
+        all_returns = compute_portfolio_returns(data, symbols, weights)
+        _, test_returns = apply_fold_to_returns(all_returns, fold)
+        if len(test_returns) < 2:
+            continue
+        fold_sharpes.append(compute_sharpe_ratio(test_returns, risk_free_rate))
+        oos_parts.append(test_returns)
+
+    if report_ef is None:
+        return compute_efficient_frontier_on_window(
+            data,
+            symbols,
+            config,
+            risk_free_rate,
+            start=report_fold.train_start,
+            end=report_fold.train_end,
+        )
+    if report_ef.max_sharpe_portfolio is None:
+        return report_ef
+    if not oos_parts:
+        report_ef.max_sharpe_portfolio.cpcv_result = CpcvResult(folds=folds)
+        report_ef.max_sharpe_portfolio.sharpe_ratio = 0.0
+        return report_ef
+
+    oos_returns = np.concatenate(oos_parts)
+    cpcv = _aggregate_cpcv(folds, fold_sharpes, oos_returns, alpha)
+    report_ef.max_sharpe_portfolio.cpcv_result = cpcv
+    report_ef.max_sharpe_portfolio.sharpe_ratio = cpcv.dsr
+    report_ef.min_vol_portfolio = min(report_ef.points, key=lambda p: p.volatility)
+    return report_ef

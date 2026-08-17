@@ -7,6 +7,7 @@ from models import CpcvFold, DataFrame, EvolverConfig, MarketDataInput
 from mpt import (
     compute_covariance_matrix,
     compute_efficient_frontier,
+    compute_efficient_frontier_on_window,
     compute_efficient_frontier_with_cpcv,
     compute_mean_returns,
     evaluate_portfolio,
@@ -118,3 +119,64 @@ def test_frontier_weights_do_not_use_test_data():
     assert ef.max_sharpe_portfolio.sharpe_ratio == pytest.approx(
         ef.max_sharpe_portfolio.cpcv_result.dsr
     )
+
+
+def _a_b_regime_data() -> MarketDataInput:
+    """A 前段涨后段跌；B 前段跌后段涨（波动率相同）。"""
+    n = 300
+    dates = [f"2023-{i // 30 + 1:02d}-{i % 30 + 1:02d}" for i in range(n)]
+    rng = np.random.default_rng(5)
+    vol = 0.001
+    a_returns = np.concatenate([
+        rng.normal(0.002, vol, 100),
+        rng.normal(-0.002, vol, 100),
+        rng.normal(0.0, vol, 100),
+    ])
+    b_returns = np.concatenate([
+        rng.normal(-0.002, vol, 100),
+        rng.normal(0.002, vol, 100),
+        rng.normal(0.0, vol, 100),
+    ])
+    return MarketDataInput(
+        symbols={
+            "A": _flat_df(dates, (100.0 * np.cumprod(1 + a_returns)).tolist()),
+            "B": _flat_df(dates, (100.0 * np.cumprod(1 + b_returns)).tolist()),
+        }
+    )
+
+
+def test_per_fold_frontiers_follow_their_own_train_window():
+    data = _a_b_regime_data()
+    config = EvolverConfig(frontier_points=10)
+    ef1 = compute_efficient_frontier_on_window(data, ["A", "B"], config, start=0, end=99)
+    ef2 = compute_efficient_frontier_on_window(data, ["A", "B"], config, start=100, end=199)
+    assert ef1.max_sharpe_portfolio is not None
+    assert ef2.max_sharpe_portfolio is not None
+    w_a1 = ef1.max_sharpe_portfolio.weights.weights["A"]
+    w_b1 = ef1.max_sharpe_portfolio.weights.weights["B"]
+    w_a2 = ef2.max_sharpe_portfolio.weights.weights["A"]
+    w_b2 = ef2.max_sharpe_portfolio.weights.weights["B"]
+    # 每折只看自己的 train 窗口：折1 前段 A 涨 B 跌 → 偏好 A；折2 后段反之 → 偏好 B
+    assert w_a1 > w_b1
+    assert w_b2 > w_a2
+
+
+def test_cpcv_reports_latest_fold_frontier_and_oos_per_fold_sharpes():
+    data = _a_b_regime_data()
+    folds = [
+        CpcvFold(train_start=0, train_end=99, test_start=150, test_end=199),
+        CpcvFold(train_start=100, train_end=199, test_start=200, test_end=299),
+    ]
+    ef = compute_efficient_frontier_with_cpcv(
+        data, ["A", "B"], folds, EvolverConfig(frontier_points=10)
+    )
+    assert ef.max_sharpe_portfolio is not None
+    # 报告的 frontier = 最新折（test_end=299，train [100,199] 偏好 B）
+    assert ef.max_sharpe_portfolio.weights.weights["B"] > ef.max_sharpe_portfolio.weights.weights["A"]
+    # 逐折 OOS：fold1 的权重偏好 A，但其 test 窗口 [150,199] A 正在下跌 → 折1 Sharpe 为负；
+    # fold2 权重偏好 B，其 test 窗口 [200,299] 两者都平 → ~0。逐折估计必然产生此差异。
+    cpcv = ef.max_sharpe_portfolio.cpcv_result
+    assert cpcv is not None
+    assert len(cpcv.fold_sharpe_ratios) == 2
+    assert cpcv.fold_sharpe_ratios[0] < cpcv.fold_sharpe_ratios[1]
+    assert ef.max_sharpe_portfolio.sharpe_ratio == pytest.approx(cpcv.dsr)
