@@ -48,3 +48,30 @@ def test_load_regime_lookback():
         assert lookback == 6 * 21  # 126 days
     finally:
         tmp_path.unlink()
+
+
+def test_load_config_new_rules_defaults():
+    config = load_config(path="nonexistent.yaml")
+    assert config.transaction_costs.etf_spread == 0.002
+    assert config.dca.price_limit == 0.10
+    assert config.dca.lot_size == 100
+    assert config.mc_estimate_window_days == 252
+
+
+def test_load_config_new_rules_custom():
+    cfg = {
+        "transaction_costs": {"etf_spread": 0.001},
+        "dca": {"price_limit": 0.05, "lot_size": 200},
+        "mc": {"estimate_window_days": 126},
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(cfg, f)
+        tmp_path = Path(f.name)
+    try:
+        config = load_config(path=str(tmp_path))
+        assert config.transaction_costs.etf_spread == 0.001
+        assert config.dca.price_limit == 0.05
+        assert config.dca.lot_size == 200
+        assert config.mc_estimate_window_days == 126
+    finally:
+        tmp_path.unlink()

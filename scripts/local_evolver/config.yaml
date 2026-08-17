@@ -2,10 +2,16 @@ transaction_costs:
   etf_bps: 3              # ETF 万分之三佣金（含规费、过户费），盘中买卖有价差，建议 2-5 bps
   etf_min_yuan: 5         # 单笔最低佣金 5 元（默认不免五元）；若券商免五元可改为 0
   mmf_bps: 0              # 货币 ETF（511360/511880/511990）零成本近似；佣金按实际成交额收取
+  etf_spread: 0.002          # ETF 折溢价近似：买入价 = close × (1 + spread/2)
 
 dca:
   monthly_contribution: 1000   # 每月定投金额（元），进入资金池后在安全层生息
   contribution_freq_days: 21   # 定投间隔（交易日 ≈ 一个月）
+  price_limit: 0.10          # 涨停幅度：当日涨幅 ≥ 此值无法买入
+  lot_size: 100              # 整手（股）
+
+mc:
+  estimate_window_days: 252  # MC 均值/波动/协方差估计窗口（交易日）
 
 regime:
   lookback_months: 3      # 滚动特征窗口（月），用于计算 3M 收益/波动
