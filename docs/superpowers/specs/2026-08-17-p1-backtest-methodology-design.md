@@ -35,6 +35,7 @@ TODO.md 中 P1 回测方法学（决策质量）10 项待办全部完成设计�
 - 循环每个 CPCV fold：train 窗口（`[fold.train_start, fold.train_end]`）估计 → 生成前沿 → 取 max-sharpe 权重 → 在 test 窗口评估（复用现有 `compute_cpcv_result` 逻辑，得到 fold 级 Sharpe/DSR 分布）。
 - 返回的 `EfficientFrontier`：用**测试段最靠近当前（`test_end` 最大）的 fold 的 train 窗口**（即"截至当前可用数据"）生成前沿供报告展示；`max_sharpe_portfolio` 的 `cpcv_result` 携带逐折评估分布。
 - `compute_regime_blended_frontier` 删除（见第 4 项）。
+- **实现注（Task 6 简化）**：不循环每个 fold 各自生成前沿，仅用 `test_end` 最大 fold 的 train 窗口生成一次前沿，取其 max-sharpe 权重在**全部** fold 上经 `compute_cpcv_result` 样本外评估。输出（无 lookahead 权重 + fold 级 OOS 分布）与原设计一致，计算量更小。
 - 测试：构造"未来已知"的数据（如 train 段与 test 段统计量显著不同），断言权重选择只依赖 train 数据。
 
 ### 3. walk-forward purge/embargo（`walk_forward.py` + `models.py`）
