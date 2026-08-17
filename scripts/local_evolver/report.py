@@ -113,9 +113,12 @@ def generate_report(
 
     timestamp = __import__("datetime").datetime.now().isoformat()
 
-    first_symbol = symbols[0]
-    total_obs = (
-        len(data.symbols[first_symbol].close) if first_symbol in data.symbols else 0
+    # total_obs must be the SAME min-length source the windowed MPT statistics
+    # validate against (min over symbols of len(close)); symbols[0] is not
+    # guaranteed to be the shortest series.
+    total_obs = min(
+        (len(data.symbols[s].close) for s in symbols if s in data.symbols),
+        default=0,
     )
 
     num_groups = 10
