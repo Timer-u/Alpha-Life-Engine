@@ -76,3 +76,10 @@ def test_compute_cpcv_result_empty():
     folds = [CpcvFold(train_start=0, train_end=10, test_start=15, test_end=20)]
     result = compute_cpcv_result(empty_data, [], {}, folds)
     assert result.dsr == 0.0
+
+
+def test_compute_returns_from_prices_invalid_prices():
+    assert len(compute_returns_from_prices([100.0, 0.0, 110.0])) == 0
+    assert len(compute_returns_from_prices([100.0, -5.0, 110.0])) == 0
+    assert len(compute_returns_from_prices([100.0, float("nan"), 110.0])) == 0
+    assert len(compute_returns_from_prices([100.0, float("inf"), 110.0])) == 0
