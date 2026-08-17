@@ -3,6 +3,8 @@
 > 2026-08-14 状态：**P0 修复 + 真实 ETF 宇宙切换全部完成并已推送 main**（985e1c7..eabbe84，12 commits）。部署前必做项全部完成（生产迁移已执行、session 已失效、生产行情已切换为新 6 ETF 宇宙）。
 >
 > 验证基线：`npm run types/lint/build` 全绿，vitest 42 passed，pytest 122 passed，ruff/mypy --strict/bandit 全绿；本地与生产 D1 数据一致（6 ETF 共 16,226 行，最新 2026-08-13）。
+>
+> 2026-08-17 状态：P1 回测方法学 10 项全部完成（A股规则/T+1/整手/涨停/折溢价、MPT 逐折估计、WF purge/embargo、regime 死代码删除、bootstrap 修复、stability 联合扰动、MC 252日窗口+5%分位数、回测窗口延至 2013-04、执行次数饱和文档化、cpcv 除零守卫）。
 
 ## 已完成
 
@@ -85,16 +87,16 @@
 
 ### P1 回测方法学（决策质量）
 
-- [ ] **A 股交易规则未建模**：T+1 交割（`simulate_dca` 用当日余额执行）、100 股整手、涨跌停、货币基金申赎 T+1、ETF 折溢价
-- [ ] **MPT 均值/协方差全样本 lookahead**（`mpt.py:27-79`）：权重在已知未来的统计量上优化。改在各训练折内估计
-- [ ] **walk-forward 无 purge/embargo**：等分块 + train/test 紧邻。改 expanding/滚动 + 间隔；与 CPCV 收益模型统一
-- [ ] **regime 是摆设且有顺序 bug**（`regime.py:205-275`）：`compute_regime_blended_frontier` 死代码，`regime_probs`/`regime_covs` 语义错乱。接入优化或删除
-- [ ] **bootstrap 误用**（`report.py:170-183`）：对 MC 期末横截面 block bootstrap 无意义；DSR 启发式近似；PBO `num_params/2` 非标准。修正或标注局限
-- [ ] **stability 扰动破坏约束**：对 `safe_ratio`/`ambition_ratio` 独立扰动破坏 sum=1，测的是"加杠杆"
-- [ ] **GBM 漂移用全样本日均收益×252**（`monte_carlo.py:295`）；max_dd 取单条最差路径 → 用稳健分位数
-- [ ] **回测窗口由最短标的决定（~1,420 天）**：货币 ETF 511360 仅 2020-09 起（1,423 行），进取层 515080 仅 2019-12 起（1,605 行）——较指数代理时代（4,400+ 天）缩短。要么接受（现状）并在报告中量化，要么另找长历史源补早期数据
-- [ ] **执行次数受流动性上限饱和**：默认月供下 `bsm_threshold` 只改变执行时点而非次数——建模选择，需在报告中说明
-- [ ] ⚡ **`cpcv.py:77` 除零 RuntimeWarning**（pytest 中可见）：补齐样本不足分支
+- [x] **A 股交易规则未建模**：T+1 交割（`simulate_dca` 用当日余额执行）、100 股整手、涨跌停、货币基金申赎 T+1、ETF 折溢价
+- [x] **MPT 均值/协方差全样本 lookahead**（`mpt.py:27-79`）：权重在已知未来的统计量上优化。改在各训练折内估计
+- [x] **walk-forward 无 purge/embargo**：等分块 + train/test 紧邻。改 expanding/滚动 + 间隔；与 CPCV 收益模型统一
+- [x] **regime 是摆设且有顺序 bug**（`regime.py:205-275`）：`compute_regime_blended_frontier` 死代码，`regime_probs`/`regime_covs` 语义错乱。接入优化或删除
+- [x] **bootstrap 误用**（`report.py:170-183`）：对 MC 期末横截面 block bootstrap 无意义；DSR 启发式近似；PBO `num_params/2` 非标准。修正或标注局限
+- [x] **stability 扰动破坏约束**：对 `safe_ratio`/`ambition_ratio` 独立扰动破坏 sum=1，测的是"加杠杆"
+- [x] **GBM 漂移用全样本日均收益×252**（`monte_carlo.py:295`）；max_dd 取单条最差路径 → 用稳健分位数
+- [x] **回测窗口由最短标的决定（~1,420 天）**：货币 ETF 511360 仅 2020-09 起（1,423 行），进取层 515080 仅 2019-12 起（1,605 行）——较指数代理时代（4,400+ 天）缩短。要么接受（现状）并在报告中量化，要么另找长历史源补早期数据
+- [x] **执行次数受流动性上限饱和**：默认月供下 `bsm_threshold` 只改变执行时点而非次数——建模选择，需在报告中说明
+- [x] ⚡ **`cpcv.py:77` 除零 RuntimeWarning**（pytest 中可见）：补齐样本不足分支
 
 ### P2 数据管道与后端
 
