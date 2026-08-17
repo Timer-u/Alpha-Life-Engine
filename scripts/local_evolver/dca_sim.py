@@ -64,6 +64,12 @@ parameter sets. We unitize: contributions on day ``t`` are priced at the
 day-``t`` unit value (new units issued at prevailing NAV) and therefore do
 not distort the daily unit-value return series, which we return for the
 existing Sharpe/DSR machinery.
+
+Known modeling choice (P1, documented): under the default monthly
+contribution (1000 yuan / 21 trading days) the pool's accumulation speed is
+below the trigger line, so bsm_threshold changes execution TIMING but not
+the execution COUNT (liquidity-ceiling saturation). Raising the monthly
+contribution or lowering the trigger line makes the count responsive.
 """
 
 import numpy as np

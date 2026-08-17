@@ -130,3 +130,15 @@ The report includes:
 - PBO score
 - Status color (green/yellow/red based on days since evolution + PBO)
 - Next scheduled evolution timestamp
+
+## Known Modeling Choices
+
+- **Execution-count saturation**: under the default monthly contribution
+  (1000 yuan / 21 trading days) the pool accumulates slower than the trigger
+  line, so `bsm_threshold` changes execution timing but not the execution
+  count. This is a documented modeling choice — raise the monthly
+  contribution or lower the trigger line to observe count sensitivity.
+- **Backtest universe availability (as-if)**: each ETF enters the backtest
+  from its own listing date; before 511360 (2020-09) and 515080 (2019-11)
+  listed, the safe/ambition composites renormalize across the available
+  funds (all real prices, no index proxies). Window: 2013-04 onward.
