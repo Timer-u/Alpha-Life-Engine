@@ -308,7 +308,7 @@ def test_execution_settles_t_plus_1_not_same_day():
 ```bash
 py -3.14 -m pytest scripts/local_evolver/tests/test_dca_sim.py -v
 ```
-Expected: 新 4 例 FAIL（旧实现当日结算、无整手/涨停/折溢价逻辑）。
+Expected: 新 3 例 FAIL（旧实现当日结算、无整手/涨停/折溢价逻辑）。
 
 - [ ] **Step 3: 重写 `simulate_dca` 结算逻辑**
 
@@ -404,7 +404,7 @@ A-share trading rules (P1, all configurable):
 ```bash
 py -3.14 -m pytest scripts/local_evolver/tests/test_dca_sim.py -v
 ```
-Expected: 全部 PASS（原 19 例按上述微调 + 新 4 例）。
+Expected: 全部 PASS（原 19 例按上述微调 + 新 3 例）。
 
 - [ ] **Step 5: 提交**
 
@@ -1228,7 +1228,7 @@ def compute_bootstrap_from_walk_forward(
 ```bash
 py -3.14 -m pytest scripts/local_evolver/tests/test_report.py scripts/local_evolver/tests/test_dsr.py scripts/local_evolver/tests/test_walk_forward.py -v
 ```
-Expected: 全部 PASS（报告 5 例 + DSR 15 例 + WF 19 例，含新 2 例）。
+Expected: 全部 PASS（报告 5 例 + DSR 15 例 + WF 21 例，含新 2 例）。
 
 - [ ] **Step 6: 提交**
 
@@ -1326,7 +1326,7 @@ def test_weighted_composite_renormalizes_across_available_symbols():
 ```bash
 py -3.14 -m pytest scripts/local_evolver/tests/test_walk_forward.py -v
 ```
-Expected: 新 4 例 FAIL（当前 inner join 返回 3 天窗口 / 无 NaN / 无归一化）。
+Expected: 新 3 例 FAIL（当前 inner join 返回 3 天窗口 / 无 NaN / 无归一化）。
 
 - [ ] **Step 3: 实现 union-join**
 
@@ -1441,7 +1441,7 @@ def _weighted_composite(
 ```bash
 py -3.14 -m pytest scripts/local_evolver/tests/test_walk_forward.py
 ```
-Expected: 全部 PASS（原 16 例 + 新 4 例；`test_extract_prices_for_symbols_aligned` 全量同日期 → 主索引不变；`test_extract_prices_for_symbols_inner_joins_on_dates` 用 A/B 非回测宇宙 → 仍 inner join）。
+Expected: 全部 PASS（原 16 例 + 新 3 例；`test_extract_prices_for_symbols_aligned` 全量同日期 → 主索引不变；`test_extract_prices_for_symbols_inner_joins_on_dates` 用 A/B 非回测宇宙 → 仍 inner join）。
 
 - [ ] **Step 6: 全量回归**
 
