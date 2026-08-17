@@ -13,9 +13,7 @@ from models import (
     FrontierPoint,
     MarketDataInput,
     PortfolioWeights,
-    RegimeResult,
 )
-from regime import blended_covariance, detect_regimes
 
 DEFAULT_RISK_FREE_RATE = 0.025
 
@@ -28,6 +26,8 @@ def compute_mean_returns(
     data: MarketDataInput,
     symbols: list[str],
     device: torch.device,
+    start: int = 0,
+    end: int | None = None,
 ) -> torch.Tensor:
     n = min(
         (len(data.symbols[s].close) for s in symbols if s in data.symbols),
@@ -35,6 +35,11 @@ def compute_mean_returns(
     )
     if n < 10:
         msg = "No valid data or too few observations"
+        raise ValueError(msg)
+    if end is None:
+        end = n - 1
+    if start < 0 or end >= n or start > end:
+        msg = f"invalid window start={start}, end={end} for n={n}"
         raise ValueError(msg)
 
     means = []
@@ -45,7 +50,10 @@ def compute_mean_returns(
         else:
             prices = np.array(df.close[-n:], dtype=np.float64)
             rets = prices[1:] / prices[:-1] - 1.0
-            means.append(float(rets.mean()))
+            lo = max(start, 1)
+            hi = min(end + 1, len(rets))
+            seg = rets[lo:hi]
+            means.append(float(seg.mean()) if len(seg) > 0 else 0.0)
     return torch.tensor(means, device=device, dtype=torch.float32)
 
 
@@ -53,6 +61,8 @@ def compute_covariance_matrix(
     data: MarketDataInput,
     symbols: list[str],
     device: torch.device,
+    start: int = 0,
+    end: int | None = None,
 ) -> torch.Tensor:
     n = min(
         (len(data.symbols[s].close) for s in symbols if s in data.symbols),
@@ -60,6 +70,11 @@ def compute_covariance_matrix(
     )
     if n < 2:
         return torch.zeros(len(symbols), len(symbols), device=device)
+    if end is None:
+        end = n - 1
+    if start < 0 or end >= n or start > end:
+        msg = f"invalid window start={start}, end={end} for n={n}"
+        raise ValueError(msg)
 
     returns_list = []
     for sym in symbols:
@@ -74,6 +89,11 @@ def compute_covariance_matrix(
             )
 
     R = torch.stack(returns_list)
+    lo = max(start, 1)
+    hi = min(end + 1, R.shape[1])
+    R = R[:, lo:hi]
+    if R.shape[1] < 2:
+        return torch.zeros(len(symbols), len(symbols), device=device)
     mean_centered = R - R.mean(dim=1, keepdim=True)
     cov = (mean_centered @ mean_centered.T) / (R.shape[1] - 1)
     return cov
@@ -170,27 +190,18 @@ def extract_efficient_frontier(
     )
 
 
-def compute_efficient_frontier(
-    data: MarketDataInput,
+def _frontier_from_moments(
+    mean_returns: torch.Tensor,
+    cov_matrix: torch.Tensor,
     symbols: list[str],
-    config: EvolverConfig | None = None,
-    risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
+    num_points: int,
+    risk_free_rate: float,
+    device: torch.device,
 ) -> EfficientFrontier:
-    if config is None:
-        from models import DEFAULT_EVOLVER_CONFIG
-
-        config = DEFAULT_EVOLVER_CONFIG
-
-    device = _get_device()
-    num_points = config.frontier_points
+    num_assets = len(symbols)
     num_candidates = max(num_points * 20, 1000)
 
-    mean_returns = compute_mean_returns(data, symbols, device)
-    cov_matrix = compute_covariance_matrix(data, symbols, device)
-    num_assets = len(symbols)
-
     raw_weights = generate_random_portfolios(num_assets, num_candidates, device)
-
     exp_returns, volatilities, sharpes = evaluate_portfolio(
         raw_weights, mean_returns, cov_matrix, risk_free_rate
     )
@@ -222,6 +233,43 @@ def compute_efficient_frontier(
     )
 
 
+def compute_efficient_frontier(
+    data: MarketDataInput,
+    symbols: list[str],
+    config: EvolverConfig | None = None,
+    risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
+) -> EfficientFrontier:
+    return compute_efficient_frontier_on_window(
+        data, symbols, config, risk_free_rate, start=0, end=None
+    )
+
+
+def compute_efficient_frontier_on_window(
+    data: MarketDataInput,
+    symbols: list[str],
+    config: EvolverConfig | None = None,
+    risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
+    start: int = 0,
+    end: int | None = None,
+) -> EfficientFrontier:
+    if config is None:
+        from models import DEFAULT_EVOLVER_CONFIG
+
+        config = DEFAULT_EVOLVER_CONFIG
+
+    device = _get_device()
+    mean_returns = compute_mean_returns(data, symbols, device, start, end)
+    cov_matrix = compute_covariance_matrix(data, symbols, device, start, end)
+    return _frontier_from_moments(
+        mean_returns,
+        cov_matrix,
+        symbols,
+        config.frontier_points,
+        risk_free_rate,
+        device,
+    )
+
+
 def compute_efficient_frontier_with_cpcv(
     data: MarketDataInput,
     symbols: list[str],
@@ -230,99 +278,44 @@ def compute_efficient_frontier_with_cpcv(
     risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
     alpha: float = 0.05,
 ) -> EfficientFrontier:
-    ef = compute_efficient_frontier(data, symbols, config, risk_free_rate)
+    """Frontier estimated inside the most-recent fold's train window only.
 
-    for point in ef.points:
-        cpcv = compute_cpcv_result(
-            data, symbols, point.weights.weights, folds, risk_free_rate, alpha
-        )
-        point.cpcv_result = cpcv
-        point.sharpe_ratio = cpcv.dsr
-
-    if ef.points:
-        ef.max_sharpe_portfolio = max(ef.points, key=lambda p: p.sharpe_ratio)
-        ef.min_vol_portfolio = min(ef.points, key=lambda p: p.volatility)
-
-    return ef
-
-
-def compute_regime_blended_frontier(
-    data: MarketDataInput,
-    symbols: list[str],
-    folds: list[CpcvFold],
-    config: EvolverConfig | None = None,
-    risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
-    alpha: float = 0.05,
-) -> tuple[EfficientFrontier, RegimeResult]:
-    """用状态 blend 协方差替代样本协方差，重新计算有效前沿。
-
-    使用当前市场状态的概率加权协方差矩阵（blended covariance），
-    生成对未来市场环境更具鲁棒性的有效前沿。
+    Mean/covariance statistics are estimated on the training segment of the
+    fold whose test window ends most recently ("data available as of now"),
+    so the chosen weights never see future data. The max-sharpe weights are
+    then evaluated out-of-sample across ALL folds via compute_cpcv_result.
     """
-    device = _get_device()
+    if config is None:
+        from models import DEFAULT_EVOLVER_CONFIG
 
-    regime_result = detect_regimes(data, symbols)
+        config = DEFAULT_EVOLVER_CONFIG
 
-    mean_returns = compute_mean_returns(data, symbols, device)
-    sample_cov = compute_covariance_matrix(data, symbols, device)
-
-    blended_cov = sample_cov
-    if regime_result.regime_covariances and len(regime_result.regime_covariances) == 3:
-        regime_cov_tensors = [
-            torch.tensor(c, device=device, dtype=torch.float32)
-            for c in regime_result.regime_covariances
-        ]
-        blended_cov = blended_covariance(
-            sample_cov, regime_result.regime_probs, regime_cov_tensors
+    if not folds:
+        return compute_efficient_frontier_on_window(
+            data, symbols, config, risk_free_rate
         )
 
-    num_points = config.frontier_points if config else 50
-    num_candidates = max(num_points * 20, 1000)
-    num_assets = len(symbols)
-
-    raw_weights = generate_random_portfolios(num_assets, num_candidates, device)
-    exp_returns, volatilities, sharpes = evaluate_portfolio(
-        raw_weights,
-        mean_returns,
-        blended_cov,
+    report_fold = max(folds, key=lambda f: f.test_end)
+    ef = compute_efficient_frontier_on_window(
+        data,
+        symbols,
+        config,
         risk_free_rate,
+        start=report_fold.train_start,
+        end=report_fold.train_end,
     )
+    if not ef.max_sharpe_portfolio:
+        return ef
 
-    w_f, r_f, v_f, s_f = extract_efficient_frontier(
-        raw_weights,
-        exp_returns,
-        volatilities,
-        sharpes,
-        num_points,
+    cpcv = compute_cpcv_result(
+        data,
+        symbols,
+        ef.max_sharpe_portfolio.weights.weights,
+        folds,
+        risk_free_rate,
+        alpha,
     )
-
-    points: list[FrontierPoint] = []
-    for i in range(len(r_f)):
-        w_dict = {symbols[j]: float(w_f[i, j].item()) for j in range(num_assets)}
-        points.append(
-            FrontierPoint(
-                weights=PortfolioWeights(weights=w_dict),
-                expected_return=annualize_return(float(r_f[i].item()), 252),
-                volatility=annualize_volatility(float(v_f[i].item()), 252),
-                sharpe_ratio=float(s_f[i].item()) * math.sqrt(252),
-            )
-        )
-
-    for point in points:
-        cpcv = compute_cpcv_result(
-            data,
-            symbols,
-            point.weights.weights,
-            folds,
-            risk_free_rate,
-            alpha,
-        )
-        point.cpcv_result = cpcv
-        point.sharpe_ratio = cpcv.dsr
-
-    ef = EfficientFrontier(points=points)
-    if points:
-        ef.max_sharpe_portfolio = max(points, key=lambda p: p.sharpe_ratio)
-        ef.min_vol_portfolio = min(points, key=lambda p: p.volatility)
-
-    return ef, regime_result
+    ef.max_sharpe_portfolio.cpcv_result = cpcv
+    ef.max_sharpe_portfolio.sharpe_ratio = cpcv.dsr
+    ef.min_vol_portfolio = min(ef.points, key=lambda p: p.volatility)
+    return ef
