@@ -48,6 +48,9 @@ A-share trading rules (P1, all configurable):
     and start earning on the next day.
   - 100-share lot rounding at execution price close*(1+spread/2); leftover
     cash stays in the safe layer; commission charged on actual notional.
+    The ambition layer is credited at FAIR VALUE (shares * close): the
+    spread paid above close is a realized cost, not a subsidy into the
+    higher-yield layer.
   - Limit-up days (return >= price_limit) skip execution (cannot fill).
 
 On EXECUTE the executed amount equals the trigger line and is split
@@ -267,7 +270,8 @@ def simulate_dca(
                 )
                 if shares > 0 and safe_cash >= actual + commission:
                     safe_cash -= actual + commission
-                    pending_ambition += actual
+                    fair = shares * float(ambition_prices[t])
+                    pending_ambition += fair
                     num_executions += 1
                     total_commission += commission
 

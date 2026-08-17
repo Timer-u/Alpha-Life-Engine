@@ -267,6 +267,27 @@ def test_execution_uses_lot_rounding_and_spread_price():
     )
 
 
+def test_spread_is_realized_cost_not_ambition_subsidy():
+    # 与上面同市场/参数，唯一差异是 etf_spread。佣金归零以隔离价差效应：
+    # 修复前 pending_ambition += actual（价差又回流进取层）→ 两种 spread 下
+    # final_nav 相等；修复后进取层按 fair value 入账 → 价差成为已实现成本，
+    # final_nav(spread=0.002) 严格低于 final_nav(spread=0.0)。
+    length = 120
+    flat = np.zeros(length)
+    prices = np.ones(length) * 4.05
+    p = _params()
+    dca = _dca(monthly=2000.0)
+    out_spread = simulate_dca(
+        flat, flat, prices, p, _cost(bps=0.0, min_yuan=0.0, spread=0.002), dca, 0, length - 1
+    )
+    out_flat = simulate_dca(
+        flat, flat, prices, p, _cost(bps=0.0, min_yuan=0.0, spread=0.0), dca, 0, length - 1
+    )
+    assert out_spread.num_executions > 0
+    assert out_spread.num_executions == out_flat.num_executions
+    assert out_spread.final_nav < out_flat.final_nav
+
+
 def test_execution_skipped_on_limit_up():
     length = 31  # 窗口在第 30 天（涨停日）结束：价格尖峰不会波及后续执行
     flat = np.zeros(length)
