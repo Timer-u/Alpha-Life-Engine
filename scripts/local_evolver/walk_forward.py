@@ -406,6 +406,10 @@ def _compute_pbo(
     train_ranks: list[list[int]],
     test_ranks: list[list[int]],
 ) -> tuple[float, list[list[float]]]:
+    """Note: "probability of backtest overfitting" per Bailey et al. (2015) —
+    the fraction of splits where the IS-best configuration lands below the
+    median OOS rank (num_params/2). This is the standard definition.
+    """
     num_params = len(train_ranks)
     num_splits = len(train_ranks[0]) if train_ranks else 0
 

@@ -12,9 +12,17 @@ from models import (
     StabilityReport,
     StrategyParameterSet,
     StrategyReportData,
+    WalkForwardResult,
     WalkForwardSummary,
+    WalkForwardWindow,
 )
-from report import _dataclass_to_dict, _sanitize_for_json, serialize_report
+from report import (
+    _dataclass_to_dict,
+    _sanitize_for_json,
+    compute_bootstrap_from_walk_forward,
+    serialize_report,
+)
+from walk_forward import BACKTEST_SYMBOLS
 
 
 def test_sanitize_for_json():
@@ -107,3 +115,34 @@ def test_serialize_report_handles_nan():
     )
     json_str = serialize_report(report)
     assert "null" in json_str.lower()
+
+
+def test_bootstrap_from_walk_forward_oos_returns(sample_market_data, sample_params):
+    summary = WalkForwardSummary(
+        results=[
+            WalkForwardResult(
+                window=WalkForwardWindow(
+                    train_start=0, train_end=100, test_start=120, test_end=219
+                ),
+                optimal_params=sample_params,
+                train_sharpe=0.1,
+                test_sharpe=0.05,
+                dsr=0.5,
+            )
+        ]
+    )
+    result = compute_bootstrap_from_walk_forward(
+        sample_market_data, BACKTEST_SYMBOLS, summary, EvolverConfig(), 0.025
+    )
+    assert set(result.keys()) == {"sharpe", "sortino", "max_drawdown"}
+    for key in result:
+        assert result[key]["mean"] is not None
+        assert len(result[key]["ci_95"]) == 2
+
+
+def test_bootstrap_from_walk_forward_empty_when_no_positive(sample_market_data):
+    summary = WalkForwardSummary(results=[])
+    result = compute_bootstrap_from_walk_forward(
+        sample_market_data, BACKTEST_SYMBOLS, summary, EvolverConfig(), 0.025
+    )
+    assert result == {}
