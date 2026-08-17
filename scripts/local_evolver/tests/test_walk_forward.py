@@ -353,3 +353,15 @@ def test_generate_walk_forward_windows_gap_too_large_raises():
             purge_days=80,
             embargo_days=80,
         )
+
+
+def test_generate_walk_forward_windows_purge_exceeds_train():
+    # purge=150 >= train_size=119 → 训练窗口被整体清除，必须报错
+    with pytest.raises(ValueError, match="purge"):
+        generate_walk_forward_windows(
+            total_obs=500,
+            num_windows=2,
+            train_ratio=0.7,
+            purge_days=150,
+            embargo_days=10,
+        )

@@ -257,6 +257,12 @@ def generate_walk_forward_windows(
         raise ValueError(msg)
 
     train_size = int(windows_per_fold * train_ratio)
+    if purge_days >= train_size:
+        msg = (
+            f"purge_days ({purge_days}) must be < train_size ({train_size}); "
+            "the purged train window would be empty"
+        )
+        raise ValueError(msg)
     test_size = windows_per_fold - train_size
     if test_size < MIN_OBS_FOR_SHARPE:
         msg = (
