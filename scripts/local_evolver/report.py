@@ -112,6 +112,7 @@ def generate_report(
             initial_prices,
             config.gbm_days,
             config.gbm_paths,
+            estimate_window_days=config.mc_estimate_window_days,
         )
 
     # === Walk-Forward with transaction costs ===
