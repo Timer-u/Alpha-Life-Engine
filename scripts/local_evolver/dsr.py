@@ -249,9 +249,12 @@ def bootstrap_ci(
 
     sharpes = np.array([compute_sharpe_ratio(b, risk_free_rate) for b in boot])
     sortinos = np.array([compute_sortino_ratio(b, risk_free_rate) for b in boot])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        dd_ratios = [
+            (np.maximum.accumulate(b) - b) / np.maximum.accumulate(b) for b in boot
+        ]
     maxdds = np.array([
-        float(np.min((np.maximum.accumulate(b) - b) / np.maximum.accumulate(b)))
-        for b in boot
+        float(np.min(np.where(np.isfinite(dd), dd, 0.0))) for dd in dd_ratios
     ])
 
     def _ci(arr: np.ndarray, level: float) -> tuple[float, float]:
