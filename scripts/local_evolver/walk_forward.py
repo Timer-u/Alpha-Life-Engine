@@ -2,8 +2,11 @@
 
 The backtest safe layer runs on real money-market ETFs（回测即实盘宇宙）:
 511360 / 511880 / 511990, the same universe the frontend executes live.
-All series are aligned by explicit trading-date inner-join so a
-suspension/missing day can never silently shift one series against another.
+For the backtest universe all series are aligned by explicit trading-date
+union-join with per-layer availability (late listings get NaN until their
+first bar); any other symbol set is aligned by inner-join across trading
+dates. Either way a suspension/missing day can never silently shift one
+series against another.
 """
 
 import random
@@ -91,11 +94,14 @@ def extract_prices_for_symbols(
     data: MarketDataInput,
     symbols: list[str],
 ) -> list[np.ndarray]:
-    """Explicit date-based alignment (inner join across trading dates).
+    """Explicit date-based alignment across trading dates.
 
-    Replaces the silent ``min(len)`` tail-alignment (C1): every symbol's
-    series is rebuilt on the intersection of its trading dates, in sorted
-    order, so a suspension day cannot shift series against each other.
+    The backtest universe (``BACKTEST_SYMBOLS``) is aligned by union-join
+    with per-layer availability (P1): late listings are padded with NaN
+    until their first bar, and composites renormalize across whatever is
+    available. Any other symbol set is aligned by inner-join (intersection
+    of trading dates). Both replace the silent ``min(len)`` tail-alignment
+    (C1): a suspension day cannot silently shift series against each other.
     """
     if not symbols:
         msg = "no symbols given"
