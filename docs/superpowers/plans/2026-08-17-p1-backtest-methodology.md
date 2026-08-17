@@ -239,6 +239,7 @@ git commit -m "feat(evolver): add A-share rule and MC window config fields"
   - EXECUTE 当日扣现金、份额记 `pending_ambition`，次日并入 `ambition_value`（次日起参与收益）
   - 涨停日（`ambition_returns[t] >= price_limit`）跳过执行
   - 执行价 `close[t] * (1 + etf_spread/2)`，整手取整 `floor(amount / price / lot) * lot`，佣金按实际成交额
+  - 买入份额按公平价值 `shares * close` 计入 `pending_ambition`（价差 `shares * close * etf_spread/2` 为已实现成本，从现金中扣减，不补贴进取层净值）
   - 不足 1 手（shares == 0）不执行
 
 - [ ] **Step 1: 写失败测试**
@@ -700,7 +701,8 @@ git commit -m "fix(evolver): joint safe/ambition perturbation preserves sum=1"
   - `compute_mean_returns(data, symbols, device, start: int = 0, end: int | None = None) -> torch.Tensor`
   - `compute_covariance_matrix(data, symbols, device, start: int = 0, end: int | None = None) -> torch.Tensor`
   - `compute_efficient_frontier_on_window(data, symbols, config, risk_free_rate, start, end) -> EfficientFrontier`
-  - `compute_efficient_frontier_with_cpcv` 改为：在 test_end 最大的 fold 的 train 窗口内估计统计量生成前沿，权重只在 train 数据上选择；`max_sharpe_portfolio.cpcv_result` 携带全 fold 样本外评估分布，`sharpe_ratio = dsr`
+  - `compute_efficient_frontier_with_cpcv` 改为：**逐折估计**——每个 fold 在自身 train 窗口（`[train_start, train_end]` 闭区间，与 `apply_fold_to_returns` 切片一致）内估计统计量生成前沿、取该折 max-sharpe 权重，并在**该折自己的 test 窗口**上样本外评估（逐折 OOS 收益拼接 → fold 级 Sharpe/DSR 分布）；报告的 `max_sharpe_portfolio` = test_end 最大折（最新）的前沿，`sharpe_ratio = dsr`
+  - （2026-08-18 用户裁决：最终评审发现"单前沿 + 全 fold 评估"方案中早期折 test 窗口落在估计窗口内（样本内混合），恢复逐折估计；Task 6 测试在实现阶段曾按简化方案验收，最终评审后按本语义复验）
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1257,7 +1259,7 @@ git commit -m "fix(evolver): bootstrap CI on WF out-of-sample returns; annotate 
 - Consumes: 无（依赖 walk_forward 既有常量 `BACKTEST_SAFE_SYMBOLS`/`AMBITION_SYMBOLS`/`BACKTEST_SYMBOLS`）
 - Produces:
   - `extract_prices_for_symbols(data, symbols)`：当 `set(symbols) == set(BACKTEST_SYMBOLS)` 时返回 **union-join**（日期主索引 = 全部标的交易日并集，起点截断到两层均有数据的首日 `max(安全层最早日期, 进取层最早日期)`，缺失标的早期日期填 NaN）；其余符号集合保持原 inner-join 语义
-  - `_weighted_composite`：逐日忽略 NaN，用当日可用标的权重归一化合成
+  - `_weighted_composite`：**收益加权链式合成**——每日合成收益 = 当日可用（t-1 与 t 均有有限价格且 prev > 0）标的收益按再归一化权重加权平均；净值从 1.0 链式累乘；晚上市标的上市首日无 t-1 价格被排除（天然无水平跳变）；当日无可用收益 → NaN（绝不静默输出 0）
   - `compute_portfolio_returns_for_params`：复合价格含 NaN 时响亮报错（命名日期）
 
 - [ ] **Step 1: 写失败测试**
@@ -1311,23 +1313,37 @@ def test_extract_prices_union_join_truncates_before_both_layers_exist():
         assert np.isfinite(p).all()
 
 
-def test_weighted_composite_renormalizes_across_available_symbols():
+def test_weighted_composite_chain_linked_no_entry_jump():
+    # 旧实现重标定价格水平：515080 上市日（~1.0 元）会瞬间拉低进取层水平线
+    # （510300/510500 为 4-6 元）→ 组合出现虚假的 ~15% 单日下跌。
+    # 修复后按收益率加权 + 链式复利：新上市标的在其上市日无 t-1 价格 → 被剔除，
+    # 组合收益只反映在位标的 → 构造性无跳变。
     all_prices = [
-        np.array([1.0, 1.0, np.nan, np.nan]),
-        np.array([2.0, 2.0, 2.0, np.nan]),
-        np.array([4.0, 4.0, 4.0, 4.0]),
+        np.array([1.0, 1.0, 1.0, 1.0]),  # X：第 0 天就在位
+        np.array([np.nan, np.nan, 5.0, 5.5]),  # Y：第 2 天才上市（价位 5.0）
     ]
-    symbols = ["X", "Y", "Z"]
-    indices = [0, 1, 2]
-    weights = {"X": 0.5, "Y": 0.3, "Z": 0.2}
+    symbols = ["X", "Y"]
+    indices = [0, 1]
+    weights = {"X": 0.5, "Y": 0.5}
     composite = _weighted_composite(all_prices, symbols, indices, weights)
-    # 第 0-1 天：X/Y/Z 全可用 → 0.5*1+0.3*2+0.2*4 = 1.9
-    # 第 2 天：X 缺失 → (0.3*2+0.2*4)/0.5 = 2.8
-    # 第 3 天：仅 Z → 4.0
-    np.testing.assert_allclose(composite, [1.9, 1.9, 2.8, 4.0])
-    # 所有可用权重均为 0 → 返回 NaN，绝不静默输出 0 复合价格
-    assert np.isnan(_weighted_composite(all_prices, symbols, [0], {"Y": 1.0})).all()
+    # 第 0 天为锚点：nav = 1.0
+    assert composite[0] == pytest.approx(1.0)
+    # 第 1 天仅 X 有收益率（0%）→ nav 不变
+    assert composite[1] == pytest.approx(1.0)
+    # 第 2 天 Y 上市：X 收益率有限、Y 无 t-1 → 只按 X 加权 → 仍无跳变
+    # （旧实现价格水平 = 0.5*1 + 0.5*5 = 3.0，会突兀跳升）
+    assert composite[2] == pytest.approx(1.0)
+    # 第 3 天两者均有收益率 → r = 0.5*0 + 0.5*(5.5/5 - 1) = 0.05 → nav = 1.05
+    assert composite[3] == pytest.approx(1.05)
+    # 链式一致性：nav[t]/nav[t-1] - 1 == 当日加权收益率
+    assert composite[3] / composite[2] - 1.0 == pytest.approx(0.05)
+    # 所有可用权重均为 0 → 返回 NaN，绝不静默输出 0 复合水平
+    zero = _weighted_composite(all_prices, symbols, [0], {"Y": 1.0})
+    assert zero[0] == pytest.approx(1.0)
+    assert np.isnan(zero[1:]).all()
 ```
+
+（2026-08-18 用户裁决：最终评审发现价格水平归一化在 515080 晚上市时产生 ~15% 单日跳变，改为收益加权链式合成；`test_extract_prices_union_join_*` 断言价格数组，不受影响。）
 
 - [ ] **Step 2: 运行测试确认失败**
 
@@ -1406,9 +1422,7 @@ def _union_join_aligned(
     return aligned
 ```
 
-- [ ] **Step 4: `_weighted_composite` NaN 归一化**
-
-替换 `_weighted_composite` 实现：
+- [ ] **Step 4: `_weighted_composite` 收益加权链式合成**（2026-08-18 用户裁决，替代原价格水平归一化）
 
 ```python
 def _weighted_composite(
@@ -1418,19 +1432,23 @@ def _weighted_composite(
     weights: dict[str, float],
 ) -> np.ndarray:
     base = all_prices[indices[0]]
-    composite = np.full(len(base), np.nan)
-    for i in range(len(base)):
+    nav = np.full(len(base), np.nan)
+    nav[0] = 1.0  # 锚点 1.0
+    for i in range(1, len(base)):
         total = 0.0
         value = 0.0
         for idx in indices:
             w = weights.get(symbols[idx], 0.0)
-            p = all_prices[idx][i]
-            if w > 0 and np.isfinite(p):
-                value += w * p
+            prev = all_prices[idx][i - 1]
+            cur = all_prices[idx][i]
+            if w > 0 and np.isfinite(prev) and np.isfinite(cur) and prev > 0:
+                value += w * (cur / prev - 1.0)
                 total += w
         if total > 0:
-            composite[i] = value / total
-    return composite
+            nav[i] = nav[i - 1] * (1.0 + value / total)
+        else:
+            nav[i] = np.nan  # 无可用收益 → NaN，绝不静默输出 0
+    return nav
 ```
 
 `compute_portfolio_returns_for_params` 中在构建 `safe_price`/`ambition_price` 后追加守卫：
@@ -1502,9 +1520,18 @@ contribution or lowering the trigger line makes the count responsive.
   count. This is a documented modeling choice — raise the monthly
   contribution or lower the trigger line to observe count sensitivity.
 - **Backtest universe availability (as-if)**: each ETF enters the backtest
-  from its own listing date; before 511360 (2020-09) and 515080 (2019-11)
-  listed, the safe/ambition composites renormalize across the available
-  funds (all real prices, no index proxies). Window: 2013-04 onward.
+  from its own listing date; the safe/ambition composites are
+  **returns-weighted and chain-linked** (NAV from 1.0) over the funds
+  available on each day, so a late listing (511360 2020-09, 515080 2019-11)
+  joins without a price-level jump (all real prices, no index proxies).
+  Window: 2013-04 onward.
+- **CPCV fold degeneracy (known limitation)**: `generate_cpcv_folds` anchors
+  the embargo on `max(train_indices)`, so at the production default
+  (`num_splits=10`) only 2 folds pass the filter and `num_splits=5` yields
+  0 folds. Pre-existing; the per-fold CPCV path handles 0/2 folds without
+  in-sample leakage (reported frontier falls back to the full-window
+  frontier with no OOS claim). Follow-up recommended: anchor the embargo on
+  each fold's own train/test boundary and assert >= 1 fold.
 ```
 
 - [ ] **Step 3: 提交**
@@ -1561,7 +1588,7 @@ git commit -m "docs(todo): mark all P1 backtest methodology items complete"
 
 ## Self-Review Notes
 
-- **Spec 覆盖**：10 项 spec 逐项对应 Task 1-11（Task 12 验证收尾）。第 9 项（执行次数饱和）为纯文档，落在 Task 11。第 2 项 spec 中"循环每个 fold 生成前沿"在 Task 6 简化为"test_end 最大 fold 的 train 窗口生成前沿 + 全 fold 样本外评估"——输出（无 lookahead 权重 + fold 级 OOS 分布）完全一致，计算量更小，已在 spec 注释中说明该简化。
+- **Spec 覆盖**：10 项 spec 逐项对应 Task 1-11（Task 12 验证收尾）。第 9 项（执行次数饱和）为纯文档，落在 Task 11。第 2 项 spec 中"循环每个 fold 生成前沿"在实现阶段先简化为"test_end 最大 fold 的 train 窗口生成前沿 + 全 fold 样本外评估"，2026-08-18 最终评审发现该简化使早期折 test 窗口落在估计窗口内（样本内混合），经用户裁决恢复**逐折估计**（每折在自身 train 窗口估计、在自身 test 窗口样本外评估，报告前沿取最新折）——即与 spec 原始设计一致。
 - **占位符扫描**：无 TBD/TODO 步骤；每个 Step 含具体代码或命令。
 - **签名已对照源码逐项核实**（本计划写入前已读 models.py/walk_forward.py/report.py/mpt.py/dca_sim.py/stability.py/monte_carlo.py/cpcv.py/config.py/config.yaml/regime.py/dsr.py 及 6 个 test 文件）：
   - `bootstrap_ci(returns, n_resamples=1000, block_size=5, levels=None, risk_free_rate=0.0, rng=None)` 返回 `{"sharpe","sortino","max_drawdown"}` 各含 `mean/std/ci_95/ci_99`（dsr.py:229）——Task 9 断言与之一致。

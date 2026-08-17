@@ -23,7 +23,7 @@ TODO.md 中 P1 回测方法学（决策质量）10 项待办全部完成设计�
 - **100 股整手**：`shares = floor(ambition_amount / execution_price / 100) * 100`；`actual_amount = shares * execution_price`；零股现金留在 safe_cash；佣金按 `actual_amount` 计。
 - **涨跌停**：`ambition_returns[t] >= limit_up`（默认 +0.10，可配置 `price_limit`）当日 EXECUTE 跳过（涨停排队无法成交）。
 - **货币基金申赎 T+1**：定投入金当日计入 `pending_safe`（不计息），次日并入 safe_cash 开始计息。
-- **ETF 折溢价**：`execution_price = close[t] * (1 + etf_spread/2)`，`etf_spread` 默认 0.002（20bps 近似）；用 execution_price 计算整手与成交额。
+- **ETF 折溢价**：`execution_price = close[t] * (1 + etf_spread/2)`，`etf_spread` 默认 0.002（20bps 近似）；用 execution_price 计算整手与成交额；**买入份额按公平价值 `shares * close` 计入 `pending_ambition`**（价差 `shares * close * etf_spread/2` 从现金扣减，为已实现成本，不补贴进取层净值）。（2026-08-18 最终评审修正：原设计按 execution_price 计入份额使价差成为对进取层的补贴而非成本。）
 
 信号计算不变（仍用收盘价、零 lookahead）。`compute_decision` 不变。新增/变更的单元测试：整手取整、T+1 冻结、涨停跳过、pending 计息、折溢价定价。
 
@@ -35,7 +35,7 @@ TODO.md 中 P1 回测方法学（决策质量）10 项待办全部完成设计�
 - 循环每个 CPCV fold：train 窗口（`[fold.train_start, fold.train_end]`）估计 → 生成前沿 → 取 max-sharpe 权重 → 在 test 窗口评估（复用现有 `compute_cpcv_result` 逻辑，得到 fold 级 Sharpe/DSR 分布）。
 - 返回的 `EfficientFrontier`：用**测试段最靠近当前（`test_end` 最大）的 fold 的 train 窗口**（即"截至当前可用数据"）生成前沿供报告展示；`max_sharpe_portfolio` 的 `cpcv_result` 携带逐折评估分布。
 - `compute_regime_blended_frontier` 删除（见第 4 项）。
-- **实现注（Task 6 简化）**：不循环每个 fold 各自生成前沿，仅用 `test_end` 最大 fold 的 train 窗口生成一次前沿，取其 max-sharpe 权重在**全部** fold 上经 `compute_cpcv_result` 样本外评估。输出（无 lookahead 权重 + fold 级 OOS 分布）与原设计一致，计算量更小。
+- **实现注（Task 6 简化，2026-08-18 已撤销）**：实现阶段曾简化为"仅用 `test_end` 最大 fold 的 train 窗口生成一次前沿，取其 max-sharpe 权重在**全部** fold 上经 `compute_cpcv_result` 样本外评估"，声称输出与原设计一致；最终评审发现早期折 test 窗口落在估计窗口内（样本内混合），**用户裁决恢复逐折估计**（即上方设计：每折自身 train 窗口估计 → 自身 test 窗口评估 → fold 级 OOS 分布）。
 - 测试：构造"未来已知"的数据（如 train 段与 test 段统计量显著不同），断言权重选择只依赖 train 数据。
 
 ### 3. walk-forward purge/embargo（`walk_forward.py` + `models.py`）
@@ -86,7 +86,8 @@ TODO.md 中 P1 回测方法学（决策质量）10 项待办全部完成设计�
 实现：
 
 - `walk_forward.py:extract_prices_for_symbols` 从全标的 inner join 改为 **union-join（outer join）**：日期主索引 = 所有标的交易日并集，起点截断到**两层均有数据的首日**（max(安全层最早日期, 进取层最早日期) = 2013-04）；缺失标的的早期日期填 NaN。
-- `_weighted_composite` 逐日处理 NaN：当日可用标的按权重归一化合成（缺失标的权重重新分配）；某日无可用标的时间段不在主索引内（每层至少一个标的自 2013 起有数据，天然满足）。
+- `_weighted_composite` **收益加权链式合成**（2026-08-18 用户裁决，替代原"价格水平归一化"）：每日合成收益 = 当日可用（t-1 与 t 均有有限价格且 prev > 0）标的收益按权重再归一化加权平均；净值从 1.0 链式累乘。晚上市标的上市首日无 t-1 价格被剔除 → 构造性无价格水平跳变（原价格归一化在 515080 上市时产生 ~15% 虚假单日跌幅，污染 WF train 窗口与 bootstrap）；当日无可用收益 → NaN（响亮，绝不静默 0）。
+- **CPCV fold 退化（已知限制）**：`generate_cpcv_folds` 以 `max(train_indices)` 锚定 embargo，生产默认 `num_splits=10` 下仅 2 个 fold 通过过滤、`num_splits=5` 下 0 个。为既有问题（非本 spec 引入）；逐折 CPCV 路径对 0/2 折无样本内泄漏（最新折前沿兜底、无 OOS 声明）。后续建议：embargo 锚定各折自身 train/test 边界并断言 >= 1 折。
 - `check_data_sufficiency` 改为：每标的须 ≥ `MIN_OBS_FOR_SHARPE` 根 K 线（不再要求同长）；`simulate_dca` 的返回序列从复合价格推导，天然对齐。
 - `dca_sim.py` 的 `simulate_dca` 签名不变（输入已是逐日标量序列）。
 - `report.py`/`cpcv.py`/`mpt.py` 中基于 `min(len(...))` 的尾部对齐逻辑（前沿估计用）不受影响（第 2 项已改为窗口内估计）。

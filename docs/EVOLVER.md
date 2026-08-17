@@ -139,6 +139,15 @@ The report includes:
   count. This is a documented modeling choice — raise the monthly
   contribution or lower the trigger line to observe count sensitivity.
 - **Backtest universe availability (as-if)**: each ETF enters the backtest
-  from its own listing date; before 511360 (2020-09) and 515080 (2019-11)
-  listed, the safe/ambition composites renormalize across the available
-  funds (all real prices, no index proxies). Window: 2013-04 onward.
+  from its own listing date; the safe/ambition composites are
+  **returns-weighted and chain-linked** (NAV from 1.0) over the funds
+  available on each day, so a late listing (511360 2020-09, 515080 2019-11)
+  joins without a price-level jump (all real prices, no index proxies).
+  Window: 2013-04 onward.
+- **CPCV fold degeneracy (known limitation)**: `generate_cpcv_folds` anchors
+  the embargo on `max(train_indices)`, so at the production default
+  (`num_splits=10`) only 2 folds pass the filter and `num_splits=5` yields
+  0 folds. Pre-existing; the per-fold CPCV path handles 0/2 folds without
+  in-sample leakage (reported frontier falls back to the full-window
+  frontier with no OOS claim). Follow-up recommended: anchor the embargo on
+  each fold's own train/test boundary and assert >= 1 fold.
