@@ -1,7 +1,7 @@
 # === Runtime ===
-akshare==1.17.5
+akshare==1.18.91
 torch==2.13.0
-numpy==2.5.1
+numpy==2.5.2
 pandas==3.0.5
 requests==2.34.2
 click==8.4.2
