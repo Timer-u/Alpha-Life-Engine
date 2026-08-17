@@ -119,22 +119,34 @@ def test_extract_prices_union_join_truncates_before_both_layers_exist():
         assert np.isfinite(p).all()
 
 
-def test_weighted_composite_renormalizes_across_available_symbols():
+def test_weighted_composite_chain_linked_no_entry_jump():
+    # 旧实现重标定价格水平：515080 上市日（~1.0 元）会瞬间拉低进取层水平线
+    # （510300/510500 为 4-6 元）→ 组合出现虚假的 ~15% 单日下跌。
+    # 修复后按收益率加权 + 链式复利：新上市标的在其上市日无 t-1 价格 → 被剔除，
+    # 组合收益只反映在位标的 → 构造性无跳变。
     all_prices = [
-        np.array([1.0, 1.0, np.nan, np.nan]),
-        np.array([2.0, 2.0, 2.0, np.nan]),
-        np.array([4.0, 4.0, 4.0, 4.0]),
+        np.array([1.0, 1.0, 1.0, 1.0]),          # X：第 0 天就在位
+        np.array([np.nan, np.nan, 5.0, 5.5]),    # Y：第 2 天才上市（价位 5.0）
     ]
-    symbols = ["X", "Y", "Z"]
-    indices = [0, 1, 2]
-    weights = {"X": 0.5, "Y": 0.3, "Z": 0.2}
+    symbols = ["X", "Y"]
+    indices = [0, 1]
+    weights = {"X": 0.5, "Y": 0.5}
     composite = _weighted_composite(all_prices, symbols, indices, weights)
-    # 第 0-1 天：X/Y/Z 全可用 → 0.5*1+0.3*2+0.2*4 = 1.9
-    # 第 2 天：X 缺失 → (0.3*2+0.2*4)/0.5 = 2.8
-    # 第 3 天：仅 Z → 4.0
-    np.testing.assert_allclose(composite, [1.9, 1.9, 2.8, 4.0])
-    # 所有可用权重均为 0 → 返回 NaN，绝不静默输出 0 复合价格
-    assert np.isnan(_weighted_composite(all_prices, symbols, [0], {"Y": 1.0})).all()
+    # 第 0 天为锚点：nav = 1.0
+    assert composite[0] == pytest.approx(1.0)
+    # 第 1 天仅 X 有收益率（0%）→ nav 不变
+    assert composite[1] == pytest.approx(1.0)
+    # 第 2 天 Y 上市：X 收益率有限、Y 无 t-1 → 只按 X 加权 → 仍无跳变
+    # （旧实现价格水平 = 0.5*1 + 0.5*5 = 3.0，会突兀跳升）
+    assert composite[2] == pytest.approx(1.0)
+    # 第 3 天两者均有收益率 → r = 0.5*0 + 0.5*(5.5/5 - 1) = 0.05 → nav = 1.05
+    assert composite[3] == pytest.approx(1.05)
+    # 链式一致性：nav[t]/nav[t-1] - 1 == 当日加权收益率
+    assert composite[3] / composite[2] - 1.0 == pytest.approx(0.05)
+    # 所有可用权重均为 0 → 返回 NaN，绝不静默输出 0 复合水平
+    zero = _weighted_composite(all_prices, symbols, [0], {"Y": 1.0})
+    assert zero[0] == pytest.approx(1.0)
+    assert np.isnan(zero[1:]).all()
 
 
 def test_extract_prices_for_symbols_inner_joins_on_dates():

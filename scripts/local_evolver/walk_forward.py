@@ -201,20 +201,33 @@ def _weighted_composite(
     indices: list[int],
     weights: dict[str, float],
 ) -> np.ndarray:
+    """Returns-weighted, chain-linked composite NAV.
+
+    The composite is built from daily RETURNS, not price levels: at day t the
+    composite return is the weight-renormalized average of the day-t returns
+    of the symbols with a finite t-1 price (a late-listed symbol is excluded
+    on its entry day, so there is no one-day price-level jump). The composite
+    NAV is chain-linked from 1.0. A day with no finite symbol returns yields
+    NaN (loud), never a silent 0.
+    """
     base = all_prices[indices[0]]
-    composite = np.full(len(base), np.nan)
-    for i in range(len(base)):
-        total = 0.0
+    nav = np.full(len(base), np.nan)
+    nav[0] = 1.0
+    for i in range(1, len(base)):
+        total_w = 0.0
         value = 0.0
         for idx in indices:
             w = weights.get(symbols[idx], 0.0)
-            p = all_prices[idx][i]
-            if w > 0 and np.isfinite(p):
-                value += w * p
-                total += w
-        if total > 0:
-            composite[i] = value / total
-    return composite
+            if w <= 0.0:
+                continue
+            prev = all_prices[idx][i - 1]
+            cur = all_prices[idx][i]
+            if np.isfinite(prev) and np.isfinite(cur) and prev > 0.0:
+                value += w * (cur / prev - 1.0)
+                total_w += w
+        if total_w > 0.0:
+            nav[i] = nav[i - 1] * (1.0 + value / total_w)
+    return nav
 
 
 def generate_walk_forward_windows(
