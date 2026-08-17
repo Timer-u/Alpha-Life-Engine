@@ -413,6 +413,11 @@ git add scripts/local_evolver/dca_sim.py scripts/local_evolver/tests/test_dca_si
 git commit -m "feat(evolver): model A-share trading rules in DCA simulator"
 ```
 
+**⚠️ User-approved deviations (2026-08-17, applied in Task 3 execution):**
+
+1. `test_execution_skipped_on_limit_up` uses `length = 31` (plan text said 60). The +10% limit-day price persists after day 30, and lot rounding at the elevated price drains cash faster on BOTH paths — at length=60 the two paths diverge by 10 executions (ctrl=49, lim=39), so the plan's own assertion `lim == ctrl - 1` could not hold against the plan's own implementation. length=31 ends the window on the limit-up day: ctrl=25, lim=24 (still discriminates: old impl gives 24/24).
+2. `test_all_six_params_affect_score` (test_walk_forward.py, pre-existing) regressed under lot rounding: its safe_ratio 0.55/0.45 variant lands in the same 100-share lot bucket as baseline at fixture prices → bit-identical score. Fix committed separately: variant changed to safe_ratio=0.49/ambition_ratio=0.51 (crosses a lot boundary; verified score changes). Committed as `test(evolver): widen safe/ambition split variant to cross lot boundary`.
+
 ---
 
 ### Task 4: walk-forward purge/embargo
