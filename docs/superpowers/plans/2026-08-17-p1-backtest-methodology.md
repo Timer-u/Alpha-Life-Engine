@@ -1105,8 +1105,8 @@ git commit -m "refactor(evolver): delete dead regime-blended covariance code"
 **Interfaces:**
 - Consumes: `extract_prices_for_symbols`、`compute_portfolio_returns_for_params`、`bootstrap_ci`、`load_bootstrap_config`
 - Produces:
-  - `compute_bootstrap_from_walk_forward(data, symbols, wf_summary, config, risk_free_rate) -> dict` — 对推荐参数在样本外测试窗口的 DCA 日收益做 block bootstrap；无正 test_sharpe 结果或样本不足（< `MIN_OBS_FOR_BOOTSTRAP`）返回 `{}`
-  - `generate_report` 的 `bootstrap_result` 改由此助手产生
+  - `compute_bootstrap_from_walk_forward(data, symbols, wf_summary, config, risk_free_rate, recommended) -> dict` — 对**推荐参数**（按 `optimal_params == recommended` 匹配的 WF 结果，取其在样本外测试窗口的 DCA 日收益）做 block bootstrap；无匹配结果或样本不足（< `MIN_OBS_FOR_BOOTSTRAP`）返回 `{}`
+  - `generate_report` 的 `bootstrap_result` 改由此助手产生（`recommended` 在 PBO/stability 覆写之后传入，保证 bootstrap 对象与 `recommended_params` 一致）
 
 - [ ] **Step 1: 写失败测试**
 
