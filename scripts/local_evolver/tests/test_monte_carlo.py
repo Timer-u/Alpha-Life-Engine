@@ -26,6 +26,13 @@ def test_cholesky_decomposition_non_psd(device):
     assert torch.isfinite(L).all()
 
 
+def test_cholesky_decomposition_non_psd_cpu():
+    matrix = torch.tensor([[1.0, 1.5], [1.5, 1.0]], device="cpu")
+    L = cholesky_decomposition(matrix)
+    assert L.shape == (2, 2)
+    assert torch.isfinite(L).all()
+
+
 def test_covariance_to_correlation(device):
     cov = torch.tensor([[0.04, 0.02], [0.02, 0.01]], device=device)
     corr, std = covariance_to_correlation(cov)

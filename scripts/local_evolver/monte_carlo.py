@@ -37,9 +37,7 @@ def cholesky_decomposition(matrix: torch.Tensor) -> torch.Tensor:
         except RuntimeError:
             eigvals, eigvecs = torch.linalg.eigh(matrix)
             eigvals = torch.clamp(eigvals, min=1e-8)
-            regularized = eigvecs @ torch.diag(eigvals) @ eigvecs.T
-            regularized = (regularized + regularized.T) / 2
-            return torch.linalg.cholesky(regularized)
+            return eigvecs @ torch.diag(torch.sqrt(eigvals))
 
 
 def covariance_to_correlation(
