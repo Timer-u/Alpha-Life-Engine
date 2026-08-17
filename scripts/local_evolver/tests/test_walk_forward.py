@@ -176,7 +176,10 @@ def test_all_six_params_affect_score(sample_market_data, sample_params):
         dataclasses.replace(base, bsm_threshold=max(1.0, base.bsm_threshold - 0.4)),
         dataclasses.replace(base, ma_short_window=base.ma_short_window + 5),
         dataclasses.replace(base, ma_long_window=base.ma_long_window + 20),
-        dataclasses.replace(base, safe_ratio=0.55, ambition_ratio=0.45),
+        # 0.49/0.51 crosses a 100-share lot boundary at fixture prices (~4.2):
+        # amount 850.17 -> 200 shares vs base 666.8 -> 100 shares. A small
+        # split delta (0.55/0.45) is absorbed by lot rounding (Task 3).
+        dataclasses.replace(base, safe_ratio=0.49, ambition_ratio=0.51),
         dataclasses.replace(base, safe_allocation={"511880": 0.5, "511990": 0.5}),
     ]
     for variant in variants:
