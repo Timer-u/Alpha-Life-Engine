@@ -130,10 +130,59 @@ def extract_prices_for_symbols(
         msg = "no common trading dates across symbols " + ", ".join(symbols)
         raise ValueError(msg)
 
+    if set(symbols) == set(BACKTEST_SYMBOLS):
+        return _union_join_aligned(symbols, by_symbol)
     ordered = sorted(common_dates)
     aligned: list[np.ndarray] = []
     for _, price_by_date in by_symbol:
         aligned.append(np.array([price_by_date[d] for d in ordered], dtype=np.float64))
+    return aligned
+
+
+def _union_join_aligned(
+    symbols: list[str],
+    by_symbol: list[tuple[str, dict[str, float]]],
+) -> list[np.ndarray]:
+    """Union-join over trading dates with per-layer availability (P1).
+
+    Master index = union of every symbol's trading dates, truncated to the
+    first date where BOTH layers have at least one symbol. Symbols that
+    listed later get NaN until their first bar; composites renormalize
+    across whatever is available (as-if backtest, no index proxies).
+    """
+    safe_symbols = set(BACKTEST_SAFE_SYMBOLS)
+    ambition_symbols = set(AMBITION_SYMBOLS)
+    all_dates: set[str] = set()
+    for _, price_by_date in by_symbol:
+        all_dates |= set(price_by_date)
+
+    def layer_first(layer: set[str]) -> str:
+        firsts = [
+            min(price_by_date)
+            for sym, price_by_date in by_symbol
+            if sym in layer and price_by_date
+        ]
+        if not firsts:
+            msg = "backtest layer has no symbols with data"
+            raise ValueError(msg)
+        return min(firsts)
+
+    first_safe = layer_first(safe_symbols)
+    first_ambition = layer_first(ambition_symbols)
+    master_start = max(first_safe, first_ambition)
+    master = sorted(d for d in all_dates if d >= master_start)
+    if not master:
+        msg = "no trading dates after both layers become available"
+        raise ValueError(msg)
+
+    aligned: list[np.ndarray] = []
+    for _, price_by_date in by_symbol:
+        aligned.append(
+            np.array(
+                [price_by_date.get(d, float("nan")) for d in master],
+                dtype=np.float64,
+            )
+        )
     return aligned
 
 
@@ -153,14 +202,18 @@ def _weighted_composite(
     weights: dict[str, float],
 ) -> np.ndarray:
     base = all_prices[indices[0]]
-    composite = np.zeros(len(base))
-    total = 0.0
-    for idx in indices:
-        w = weights.get(symbols[idx], 0.0)
-        composite += w * all_prices[idx]
-        total += w
-    if total > 0:
-        composite /= total
+    composite = np.full(len(base), np.nan)
+    for i in range(len(base)):
+        total = 0.0
+        value = 0.0
+        for idx in indices:
+            w = weights.get(symbols[idx], 0.0)
+            p = all_prices[idx][i]
+            if w > 0 and np.isfinite(p):
+                value += w * p
+                total += w
+        if total > 0:
+            composite[i] = value / total
     return composite
 
 
@@ -325,6 +378,13 @@ def compute_portfolio_returns_for_params(
     ambition_price = _weighted_composite(
         all_prices, symbols, ambition_indices, params.ambition_allocation
     )
+
+    if not np.all(np.isfinite(safe_price)) or not np.all(np.isfinite(ambition_price)):
+        msg = (
+            "composite series contains missing data on the backtest master "
+            "index; check per-symbol listing dates"
+        )
+        raise ValueError(msg)
 
     safe_returns = _prices_to_day_returns(safe_price)
     ambition_returns = _prices_to_day_returns(ambition_price)

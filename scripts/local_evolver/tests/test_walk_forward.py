@@ -10,6 +10,7 @@ from walk_forward import (
     BACKTEST_SYMBOLS,
     INVALID_SCORE,
     _compute_pbo,
+    _weighted_composite,
     check_data_sufficiency,
     compute_portfolio_returns_for_params,
     extract_prices_for_symbols,
@@ -68,6 +69,72 @@ def test_extract_prices_for_symbols_aligned(sample_market_data):
     assert len(prices) == len(BACKTEST_SYMBOLS)
     assert all(len(p) == len(prices[0]) for p in prices)
     assert len(prices[0]) == 500
+
+
+def _six_symbol_df(
+    n_days: int = 100,
+    late_safe_start: int | None = None,
+    late_ambition_start: int | None = None,
+) -> MarketDataInput:
+    dates = [f"2023-{i // 30 + 1:02d}-{i % 30 + 1:02d}" for i in range(n_days)]
+    symbols: dict[str, DataFrame] = {}
+    for i, sym in enumerate(BACKTEST_SYMBOLS):
+        sym_dates = dates
+        if sym == "511360" and late_safe_start is not None:
+            sym_dates = dates[late_safe_start:]
+        if sym == "515080" and late_ambition_start is not None:
+            sym_dates = dates[late_ambition_start:]
+        price = 100.0 + i
+        symbols[sym] = _df(sym_dates, [price] * len(sym_dates))
+    return MarketDataInput(symbols=symbols)
+
+
+def test_extract_prices_union_join_pads_late_listings():
+    data = _six_symbol_df(n_days=100, late_safe_start=30, late_ambition_start=50)
+    prices = extract_prices_for_symbols(data, BACKTEST_SYMBOLS)
+    assert len(prices) == len(BACKTEST_SYMBOLS)
+    # 两层均最早从第 0 天有数据（511880/511990/510300/510500 全量）→ 主索引 100 天
+    assert len(prices[0]) == 100
+    idx_511360 = BACKTEST_SYMBOLS.index("511360")
+    assert np.isnan(prices[idx_511360][:30]).all()
+    assert np.isfinite(prices[idx_511360][30:]).all()
+    idx_515080 = BACKTEST_SYMBOLS.index("515080")
+    assert np.isnan(prices[idx_515080][:50]).all()
+    assert np.isfinite(prices[idx_515080][50:]).all()
+
+
+def test_extract_prices_union_join_truncates_before_both_layers_exist():
+    # 进取层全部第 30 天才上市 → 主索引起点 = 第 30 天（两层都可用之后）
+    dates = [f"2023-{i // 30 + 1:02d}-{i % 30 + 1:02d}" for i in range(100)]
+    symbols: dict[str, DataFrame] = {}
+    for i, sym in enumerate(BACKTEST_SYMBOLS):
+        sym_dates = dates[30:] if sym in ("510300", "510500", "515080") else dates
+        price = 100.0 + i
+        symbols[sym] = _df(sym_dates, [price] * len(sym_dates))
+    prices = extract_prices_for_symbols(
+        MarketDataInput(symbols=symbols), BACKTEST_SYMBOLS
+    )
+    assert len(prices[0]) == 70
+    for p in prices:
+        assert np.isfinite(p).all()
+
+
+def test_weighted_composite_renormalizes_across_available_symbols():
+    all_prices = [
+        np.array([1.0, 1.0, np.nan, np.nan]),
+        np.array([2.0, 2.0, 2.0, np.nan]),
+        np.array([4.0, 4.0, 4.0, 4.0]),
+    ]
+    symbols = ["X", "Y", "Z"]
+    indices = [0, 1, 2]
+    weights = {"X": 0.5, "Y": 0.3, "Z": 0.2}
+    composite = _weighted_composite(all_prices, symbols, indices, weights)
+    # 第 0-1 天：X/Y/Z 全可用 → 0.5*1+0.3*2+0.2*4 = 1.9
+    # 第 2 天：X 缺失 → (0.3*2+0.2*4)/0.5 = 2.8
+    # 第 3 天：仅 Z → 4.0
+    np.testing.assert_allclose(composite, [1.9, 1.9, 2.8, 4.0])
+    # 所有可用权重均为 0 → 返回 NaN，绝不静默输出 0 复合价格
+    assert np.isnan(_weighted_composite(all_prices, symbols, [0], {"Y": 1.0})).all()
 
 
 def test_extract_prices_for_symbols_inner_joins_on_dates():
