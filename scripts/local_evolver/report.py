@@ -124,6 +124,8 @@ def generate_report(
         config.walk_forward_train_ratio,
         risk_free_rate / 252,
         config.dsr_alpha,
+        purge_days=config.purge_days,
+        embargo_days=config.embargo_days,
         cost_config=config.transaction_costs,
     )
 

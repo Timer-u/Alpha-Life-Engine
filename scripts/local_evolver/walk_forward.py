@@ -168,6 +168,8 @@ def generate_walk_forward_windows(
     total_obs: int,
     num_windows: int = 6,
     train_ratio: float = 0.7,
+    purge_days: int = 0,
+    embargo_days: int = 0,
 ) -> list[WalkForwardWindow]:
     if num_windows <= 0:
         msg = f"num_windows must be >= 1, got {num_windows}"
@@ -175,8 +177,19 @@ def generate_walk_forward_windows(
     if not 0.0 < train_ratio < 1.0:
         msg = f"train_ratio must be in (0, 1), got {train_ratio}"
         raise ValueError(msg)
+    if purge_days < 0 or embargo_days < 0:
+        msg = f"purge/embargo must be >= 0, got purge={purge_days}, embargo={embargo_days}"
+        raise ValueError(msg)
 
-    windows_per_fold = total_obs // num_windows
+    gap_span = (purge_days + embargo_days) * (num_windows - 1)
+    windows_per_fold = (total_obs - gap_span) // num_windows
+    if windows_per_fold < 1:
+        msg = (
+            f"total_obs ({total_obs}) too small for {num_windows} windows "
+            f"with purge={purge_days} + embargo={embargo_days}"
+        )
+        raise ValueError(msg)
+
     train_size = int(windows_per_fold * train_ratio)
     test_size = windows_per_fold - train_size
     if test_size < MIN_OBS_FOR_SHARPE:
@@ -185,18 +198,28 @@ def generate_walk_forward_windows(
             f"need >= {MIN_OBS_FOR_SHARPE} for statistically valid Sharpe/DSR"
         )
         raise ValueError(msg)
+    if test_size <= purge_days + embargo_days:
+        msg = (
+            f"test window {test_size} days must exceed purge+embargo "
+            f"({purge_days}+{embargo_days})"
+        )
+        raise ValueError(msg)
 
     windows: list[WalkForwardWindow] = []
     for w in range(num_windows):
         ws = w * windows_per_fold
-        if ws + test_size > total_obs:
+        train_end = ws + train_size - 1
+        purged_train_end = train_end - purge_days
+        test_start = train_end + 1 + embargo_days
+        test_end = test_start + test_size - 1
+        if test_end > total_obs - 1:
             break
         windows.append(
             WalkForwardWindow(
                 train_start=ws,
-                train_end=ws + train_size - 1,
-                test_start=ws + train_size,
-                test_end=ws + windows_per_fold - 1,
+                train_end=purged_train_end,
+                test_start=test_start,
+                test_end=test_end,
             )
         )
     return windows
@@ -424,6 +447,8 @@ def run_walk_forward(
     train_ratio: float = 0.7,
     risk_free_rate: float = 0.0,
     alpha: float = 0.05,
+    purge_days: int = 0,
+    embargo_days: int = 0,
     cost_config: TransactionCostConfig | None = None,
     dca_config: DcaConfig | None = None,
 ) -> WalkForwardSummary:
@@ -432,7 +457,9 @@ def run_walk_forward(
     all_prices = extract_prices_for_symbols(data, wf_symbols)
 
     total_obs = len(all_prices[0])
-    windows = generate_walk_forward_windows(total_obs, num_windows, train_ratio)
+    windows = generate_walk_forward_windows(
+        total_obs, num_windows, train_ratio, purge_days, embargo_days
+    )
     param_sets = generate_random_parameter_sets(bounds, num_parameter_sets)
 
     results: list[WalkForwardResult] = []

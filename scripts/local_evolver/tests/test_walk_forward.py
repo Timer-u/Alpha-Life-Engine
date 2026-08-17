@@ -233,3 +233,44 @@ def test_run_walk_forward_insufficient_data_raises(sample_bounds):
             num_parameter_sets=5,
             num_windows=2,
         )
+
+
+def test_generate_walk_forward_windows_purge_embargo():
+    windows = generate_walk_forward_windows(
+        total_obs=1320, num_windows=6, train_ratio=0.7, purge_days=5, embargo_days=5
+    )
+    assert len(windows) == 6
+    w0 = windows[0]
+    # gap_span = (5+5)*5 = 50; (1320-50)//6 = 211/折 → train 147, test 64
+    # w0: train_end = 146, purge 后 141; test_start = 146+1+5 = 152; test_end = 215
+    assert w0.train_start == 0
+    assert w0.train_end == 141
+    assert w0.test_start == 152
+    assert w0.test_end == 215
+    for w in windows:
+        assert w.test_end - w.test_start + 1 >= MIN_OBS_FOR_SHARPE
+        # purge/embargo: test 与 train 尾部有间隔
+        assert w.test_start > w.train_end + 1
+
+
+def test_generate_walk_forward_windows_resizes_when_gaps_overflow():
+    # 500 obs、2 窗口、gap 各 5：原始跨度 250*2+10=510 > 500 → 缩为 (500-10)//2=245
+    windows = generate_walk_forward_windows(
+        total_obs=500, num_windows=2, train_ratio=0.7, purge_days=5, embargo_days=5
+    )
+    assert len(windows) == 2
+    # w0: test_start = 170+1+5 = 176, test_end = 249
+    # w1: ws = 245, train_end = 415, purge 后 410; test_start = 421, test_end = 494
+    assert windows[0].test_end == 249
+    assert windows[1].test_end == 494
+
+
+def test_generate_walk_forward_windows_gap_too_large_raises():
+    with pytest.raises(ValueError):
+        generate_walk_forward_windows(
+            total_obs=500,
+            num_windows=2,
+            train_ratio=0.7,
+            purge_days=80,
+            embargo_days=80,
+        )
