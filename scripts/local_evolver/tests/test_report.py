@@ -132,7 +132,12 @@ def test_bootstrap_from_walk_forward_oos_returns(sample_market_data, sample_para
         ]
     )
     result = compute_bootstrap_from_walk_forward(
-        sample_market_data, BACKTEST_SYMBOLS, summary, EvolverConfig(), 0.025
+        sample_market_data,
+        BACKTEST_SYMBOLS,
+        summary,
+        sample_params,
+        EvolverConfig(),
+        0.025,
     )
     assert set(result.keys()) == {"sharpe", "sortino", "max_drawdown"}
     for key in result:
@@ -140,9 +145,16 @@ def test_bootstrap_from_walk_forward_oos_returns(sample_market_data, sample_para
         assert len(result[key]["ci_95"]) == 2
 
 
-def test_bootstrap_from_walk_forward_empty_when_no_positive(sample_market_data):
+def test_bootstrap_from_walk_forward_empty_when_no_positive(
+    sample_market_data, sample_params
+):
     summary = WalkForwardSummary(results=[])
     result = compute_bootstrap_from_walk_forward(
-        sample_market_data, BACKTEST_SYMBOLS, summary, EvolverConfig(), 0.025
+        sample_market_data,
+        BACKTEST_SYMBOLS,
+        summary,
+        sample_params,
+        EvolverConfig(),
+        0.025,
     )
     assert result == {}

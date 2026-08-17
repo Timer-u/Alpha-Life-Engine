@@ -53,6 +53,7 @@ def compute_bootstrap_from_walk_forward(
     data: MarketDataInput,
     symbols: list[str],
     wf_summary: WalkForwardSummary,
+    recommended: StrategyParameterSet,
     config: EvolverConfig,
     risk_free_rate: float = 0.025,
 ) -> dict:
@@ -60,14 +61,20 @@ def compute_bootstrap_from_walk_forward(
 
     Bootstrapping the MC terminal cross-section (per-path final returns) is
     meaningless — it has no temporal structure. The strategy's actual
-    out-of-sample daily return series (best walk-forward test window) carries
-    real autocorrelation, which block bootstrap is designed for.
+    out-of-sample daily return series (recommended walk-forward test window)
+    carries real autocorrelation, which block bootstrap is designed for.
+
+    The recommended strategy is matched against the walk-forward results by
+    dataclass equality, so the bootstrapped window is always the OOS window of
+    the strategy the report actually recommends (including the PBO/stability
+    override path, where the default best-by-DSR selection would point at a
+    different — potentially unstable — strategy).
     """
-    best_results = [r for r in wf_summary.results if r.test_sharpe > 0]
-    if not best_results:
+    best = next(
+        (r for r in wf_summary.results if r.optimal_params == recommended), None
+    )
+    if best is None:
         return {}
-    best_results.sort(key=lambda r: r.dsr, reverse=True)
-    best = best_results[0]
 
     all_prices = extract_prices_for_symbols(data, symbols)
     oos_returns = compute_portfolio_returns_for_params(
@@ -219,7 +226,7 @@ def generate_report(
 
     # === Bootstrap CI (block bootstrap on the recommended strategy's OOS returns) ===
     bootstrap_result = compute_bootstrap_from_walk_forward(
-        data, symbols, wf_summary, config, risk_free_rate
+        data, symbols, wf_summary, recommended, config, risk_free_rate
     )
 
     # === MRC (Marginal Risk Contribution) ===
