@@ -41,6 +41,15 @@ Decision branches mirror ``makeTriggerDecision`` in ``src/lib/trigger-engine.ts`
   same threshold): a high threshold makes panic days defer, so it genuinely
   changes execution timing.
 
+A-share trading rules (P1, all configurable):
+  - Contributions settle T+1: day-t contribution is pending (not earning,
+    not spendable) until day t+1.
+  - ETF buys settle T+1: cash leaves on the trade day, shares are credited
+    and start earning on the next day.
+  - 100-share lot rounding at execution price close*(1+spread/2); leftover
+    cash stays in the safe layer; commission charged on actual notional.
+  - Limit-up days (return >= price_limit) skip execution (cannot fill).
+
 On EXECUTE the executed amount equals the trigger line and is split
 ``safe_amount = executed * safe_ratio``, ``ambition_amount = executed *
 ambition_ratio``. Exchange-traded-equity commission (C3) is charged on the
@@ -203,7 +212,9 @@ def simulate_dca(
     length = end - start + 1
 
     safe_cash = 0.0
+    pending_safe = 0.0
     ambition_value = 0.0
+    pending_ambition = 0.0
     units = 0.0
     nav_prev = 1.0
     num_executions = 0
@@ -211,13 +222,23 @@ def simulate_dca(
 
     returns = np.empty(length)
     for idx, t in enumerate(range(start, end + 1)):
+        # T+1 结算：昨日定投/买入今日到账，并开始参与收益
+        safe_cash += pending_safe
+        pending_safe = 0.0
+        ambition_value += pending_ambition
+        pending_ambition = 0.0
+
         safe_cash *= 1.0 + float(safe_returns[t])
         ambition_value *= 1.0 + float(ambition_returns[t])
 
         if (t - start) % freq == 0:
-            nav_now = (safe_cash + ambition_value) / units if units > 0 else 1.0
+            nav_now = (
+                (safe_cash + pending_safe + ambition_value + pending_ambition) / units
+                if units > 0
+                else 1.0
+            )
             new_units = dca_config.monthly_contribution / nav_now
-            safe_cash += dca_config.monthly_contribution
+            pending_safe += dca_config.monthly_contribution
             units += new_units
 
         sig_type, sig_value, _ = compute_signal_at(ambition_prices, params, t)
@@ -226,14 +247,29 @@ def simulate_dca(
         )
 
         if decision.decision == "EXECUTE":
-            commission = compute_commission(decision.ambition_amount, cost_config)
-            if safe_cash >= decision.ambition_amount + commission:
-                safe_cash -= decision.ambition_amount + commission
-                ambition_value += decision.ambition_amount
-                num_executions += 1
-                total_commission += commission
+            if float(ambition_returns[t]) >= dca_config.price_limit:
+                pass  # 涨停无法成交，跳过
+            else:
+                exec_price = float(ambition_prices[t]) * (
+                    1.0 + cost_config.etf_spread / 2.0
+                )
+                lot = dca_config.lot_size
+                shares = int(decision.ambition_amount // exec_price // lot) * lot
+                actual = shares * exec_price
+                commission = (
+                    compute_commission(actual, cost_config) if shares > 0 else 0.0
+                )
+                if shares > 0 and safe_cash >= actual + commission:
+                    safe_cash -= actual + commission
+                    pending_ambition += actual
+                    num_executions += 1
+                    total_commission += commission
 
-        nav = (safe_cash + ambition_value) / units if units > 0 else nav_prev
+        nav = (
+            (safe_cash + pending_safe + ambition_value + pending_ambition) / units
+            if units > 0
+            else nav_prev
+        )
         returns[idx] = nav / nav_prev - 1.0 if nav_prev > 0 else 0.0
         nav_prev = nav
 
