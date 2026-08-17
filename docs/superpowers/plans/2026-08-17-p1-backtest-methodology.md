@@ -1233,7 +1233,10 @@ def compute_bootstrap_from_walk_forward(
 ```bash
 py -3.14 -m pytest scripts/local_evolver/tests/test_report.py scripts/local_evolver/tests/test_dsr.py scripts/local_evolver/tests/test_walk_forward.py -v
 ```
-Expected: 全部 PASS（报告 5 例 + DSR 15 例 + WF 21 例，含新 2 例）。
+Expected: 全部 PASS（报告 7 例 + DSR 15 例 + WF 19 例，含新 2 例——新测试在 test_report.py）。
+
+**⚠️ User-approved deviation (2026-08-17, applied in Task 9 execution):**
+The new bootstrap test surfaced a latent divide-by-zero RuntimeWarning in `bootstrap_ci` (dsr.py:253: `(peak - b) / peak` when a resample's running peak is 0 — the DCA OOS series contains flat days). The suite had been warning-free through Task 8; the warning would also fire in production on real flat days. Guard added in a follow-up commit (errstate/where pattern, zero-peak resamples get drawdown 0.0), committed as `fix(evolver): guard zero-peak resamples in bootstrap max_drawdown`. The brief's Step 1 tests are structural (not OOS-vs-in-sample discriminating) — accepted as brief-mandated; the second test additionally received the missing `sample_market_data` fixture parameter (would otherwise NameError).
 
 - [ ] **Step 6: 提交**
 
