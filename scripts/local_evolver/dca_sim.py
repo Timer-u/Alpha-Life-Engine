@@ -259,6 +259,7 @@ def simulate_dca(
             if float(ambition_returns[t]) >= dca_config.price_limit:
                 pass  # 涨停无法成交，跳过
             else:
+                # 买入按 ask 价成交：spread 摊到买卖两侧，单边支付一半
                 exec_price = float(ambition_prices[t]) * (
                     1.0 + cost_config.etf_spread / 2.0
                 )

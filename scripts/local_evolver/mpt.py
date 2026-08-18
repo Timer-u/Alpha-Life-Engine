@@ -60,7 +60,7 @@ def compute_mean_returns(
         else:
             prices = np.array(df.close[-n:], dtype=np.float64)
             rets = prices[1:] / prices[:-1] - 1.0
-            lo = max(start, 1)
+            lo = start
             hi = min(end + 1, len(rets))
             seg = rets[lo:hi]
             means.append(float(seg.mean()) if len(seg) > 0 else 0.0)
@@ -99,7 +99,7 @@ def compute_covariance_matrix(
             )
 
     R = torch.stack(returns_list)
-    lo = max(start, 1)
+    lo = start
     hi = min(end + 1, R.shape[1])
     R = R[:, lo:hi]
     if R.shape[1] < 2:
@@ -208,6 +208,13 @@ def _frontier_from_moments(
     risk_free_rate: float,
     device: torch.device,
 ) -> EfficientFrontier:
+    """Sample an efficient frontier from given mean/cov moments.
+
+    Random portfolios are drawn from the simplex and filtered down to the
+    Pareto-optimal frontier (``extract_efficient_frontier``); exact
+    Markowitz optimization is intentionally avoided (CLT sampling keeps
+    the frontier stable across window re-runs).
+    """
     num_assets = len(symbols)
     num_candidates = max(num_points * 20, 1000)
 

@@ -28,6 +28,13 @@ def _get_device() -> torch.device:
 
 
 def cholesky_decomposition(matrix: torch.Tensor) -> torch.Tensor:
+    """Return a square-root factor ``L`` with ``L @ L.T == matrix``.
+
+    The fallback for non-PSD input (eigendecomposition with clamped
+    eigenvalues) returns a factor that is NOT guaranteed to be lower
+    triangular — consumers must only use it via matmul (``L @ z`` /
+    ``z @ L.T``), never by reading individual entries.
+    """
     try:
         return torch.linalg.cholesky(matrix)
     except RuntimeError:

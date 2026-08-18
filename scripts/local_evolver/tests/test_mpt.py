@@ -29,6 +29,44 @@ def test_compute_covariance_matrix(sample_market_data, device):
     assert torch.diagonal(cov).ge(0).all()
 
 
+def test_windowed_stats_use_cpcv_inclusive_slice(device):
+    n = 12
+    dates = [f"2023-01-{i + 1:02d}" for i in range(n)]
+    data = MarketDataInput(
+        symbols={
+            "A": DataFrame(
+                dates=dates,
+                close=list(np.arange(1.0, n + 1)),
+                open=[],
+                high=[],
+                low=[],
+                volume=[],
+            ),
+            "B": DataFrame(
+                dates=dates,
+                close=list(np.arange(2.0, 2 * n + 1, 2.0)),
+                open=[],
+                high=[],
+                low=[],
+                volume=[],
+            ),
+        }
+    )
+    # rets[i] = (i+2)/(i+1) - 1 = 1/(i+1) for i in 0..n-2
+    rets = np.arange(2.0, n + 1) / np.arange(1.0, n) - 1.0
+    # Window slice must match cpcv.apply_fold_to_returns train convention:
+    # rets[start : end+1] — start=0 must NOT drop rets[0], and rets[end]
+    # (price end+1, inside the embargo gap) must be included.
+    means = compute_mean_returns(data, ["A"], device, start=0, end=n - 1)
+    assert means.cpu()[0].item() == pytest.approx(float(rets[0:n].mean()), rel=1e-5)
+    means_mid = compute_mean_returns(data, ["A"], device, start=2, end=n - 1)
+    assert means_mid.cpu()[0].item() == pytest.approx(float(rets[2:n].mean()), rel=1e-5)
+    cov = compute_covariance_matrix(data, ["A", "B"], device, start=0, end=n - 1)
+    expected_var = float(np.var(rets[0:n], ddof=1))
+    assert cov[0, 0].item() == pytest.approx(expected_var, rel=1e-5)
+    assert cov[0, 1].item() == pytest.approx(expected_var, rel=1e-5)
+
+
 def test_generate_random_portfolios(device):
     weights = generate_random_portfolios(5, 100, device)
     assert weights.shape == (100, 5)

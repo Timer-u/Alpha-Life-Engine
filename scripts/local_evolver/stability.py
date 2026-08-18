@@ -27,6 +27,8 @@ from walk_forward import (
     resolve_backtest_symbols,
 )
 
+RHO_EPSILON = 1e-12
+
 
 def _perturb_weights(
     weights: dict[str, float],
@@ -68,7 +70,7 @@ def _perturb_split(
         return safe_ratio, ambition_ratio
     rho = safe_ratio / total
     new_rho = min(1.0, max(0.0, rho + delta))
-    if abs(new_rho - rho) < 1e-12:
+    if abs(new_rho - rho) < RHO_EPSILON:
         return safe_ratio, ambition_ratio
     return new_rho * total, (1.0 - new_rho) * total
 
