@@ -49,6 +49,7 @@ describe('POST /api/reconciliation/:id/calibrate', () => {
         rows: [{ total_balance: 3000, safe_layer_balance: 6000, ambition_layer_balance: -3000 }],
       },
       { match: sql => sql.includes('FROM positions'), rows: [] },
+      { match: sql => sql.includes('INSERT INTO audit_logs'), rows: [] },
     ]);
 
     const res = await reconciliationRouter.request('/1/calibrate', {
@@ -85,6 +86,7 @@ describe('POST /api/reconciliation/:id/calibrate', () => {
         rows: [{ total_balance: 1000, safe_layer_balance: 600, ambition_layer_balance: 400 }],
       },
       { match: sql => sql.includes('FROM positions'), rows: [] },
+      { match: sql => sql.includes('INSERT INTO audit_logs'), rows: [] },
     ]);
 
     const res = await reconciliationRouter.request('/1/calibrate', {
@@ -95,5 +97,30 @@ describe('POST /api/reconciliation/:id/calibrate', () => {
     const json = (await res.json()) as { data: { warnings: string[] } };
     expect(Array.isArray(json.data.warnings)).toBe(true);
     expect(json.data.warnings.length).toBeGreaterThan(0);
+  });
+
+  it('writes an audit_logs row within the calibrate batch', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      {
+        match: sql => sql.includes('FROM reconciliations'),
+        rows: [{ id: 1, user_id: 7, status: 'PENDING', ending_balance: 2000, variance: 150 }],
+      },
+      {
+        match: sql => sql.includes('FROM portfolio'),
+        rows: [{ total_balance: 1000, safe_layer_balance: 600, ambition_layer_balance: 400 }],
+      },
+      { match: sql => sql.includes('FROM positions'), rows: [] },
+      { match: sql => sql.includes('INSERT INTO audit_logs'), rows: [] },
+    ]);
+
+    const res = await reconciliationRouter.request('/1/calibrate', {
+      method: 'POST',
+      headers: SESSION_COOKIE,
+    }, testEnv(db), executionCtx);
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { success: boolean };
+    expect(json.success).toBe(true);
   });
 });

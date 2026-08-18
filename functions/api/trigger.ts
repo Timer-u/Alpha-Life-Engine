@@ -40,7 +40,6 @@ async function fetchLatestPrices(db: D1Database): Promise<MarketPrices> {
 triggerRouter.use('*', sessionMiddleware);
 
 const triggerSchema = z.object({
-  current_balance: z.number().min(0),
   signal_value: z.number().min(0),
   signal_type: z.enum(['BSM', 'DOUBLE', 'NORMAL', 'SKIP']),
 });
@@ -52,9 +51,12 @@ triggerRouter.post('/', async (c) => {
     const body = await c.req.json();
     const parsed = triggerSchema.parse(body);
 
+    const portfolio = await c.env.DB.prepare('SELECT total_balance FROM portfolio WHERE user_id = ?').bind(userId).first<{ total_balance: number }>();
+    if (!portfolio) return c.json({ success: false, error: 'Not Found', message: '未找到投资组合' }, 400);
+
     const input: TriggerInput = {
       user_id: userId,
-      current_balance: parsed.current_balance,
+      current_balance: portfolio.total_balance,
       signal_value: parsed.signal_value,
       signal_type: parsed.signal_type as SignalType,
     };
@@ -71,7 +73,7 @@ triggerRouter.post('/', async (c) => {
 
     await c.env.DB.prepare(
       'INSERT INTO trigger_log (user_id, balance, trigger_decision, signal_value, executed_amount, commission, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(userId, input.current_balance, response.decision, input.signal_value,
+    ).bind(userId, portfolio.total_balance, response.decision, input.signal_value,
       response.executed_amount ?? 0, response.commission, nowIso()).run();
 
     // EXECUTE 决策异步发送执行建议邮件（不阻塞响应），1 天内去重

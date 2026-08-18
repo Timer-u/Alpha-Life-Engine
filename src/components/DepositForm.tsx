@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useActiveAllocation } from '../hooks/useActiveAllocation';
 import { usePortfolio } from '../hooks/usePortfolio';
 import { useToast } from '../hooks/useToast';
+import { yuanToCents } from '../lib/money';
 
 interface Props {
   lastEvolution: string | null;
@@ -30,9 +31,14 @@ export default function DepositForm({ lastEvolution, onSuccess }: Props) {
     e.preventDefault();
     if (parsedAmount <= 0) return;
     try {
-      const result = await deposit(parsedAmount);
+      const amountCents = yuanToCents(parsedAmount);
+      const result = await deposit({ amountCents, idempotencyKey: crypto.randomUUID() });
       setAmount('');
-      toast('success', result.message);
+      if (result.duplicate) {
+        toast('info', result.message);
+      } else {
+        toast('success', result.message);
+      }
       onSuccess();
     } catch (err) {
       toast('error', (err as Error).message);

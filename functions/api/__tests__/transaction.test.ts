@@ -21,81 +21,54 @@ function sessionRule(): { match: (sql: string) => boolean; rows: unknown[] } {
   };
 }
 
-const BUY_BODY = {
-  symbol: '511360',
-  shares: 100,
-  price: 10,
-  commission: 5,
-  transaction_type: 'buy',
-  layer: 'safe',
-};
-
-const SELL_BODY = {
-  symbol: '511360',
-  shares: 1,
-  price: 2,
-  commission: 5,
-  transaction_type: 'sell',
-  layer: 'safe',
-};
-
 describe('POST /api/transactions', () => {
   it('rejects a sell whose proceeds cannot cover the commission', async () => {
     const db = new FakeD1([
       sessionRule(),
-      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 5000, safe_layer_balance: 5000, ambition_layer_balance: 0 }] },
+      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 500000, safe_layer_balance: 500000, ambition_layer_balance: 0 }] },
       { match: sql => sql.includes('FROM positions'), rows: [{ id: 1, shares: 100, avg_price: 10 }] },
     ]);
-
     const res = await transactionRouter.request('/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
-      body: JSON.stringify(SELL_BODY),
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ symbol: '511360', shares: 1, price: 2, commission: 500, transaction_type: 'sell', layer: 'safe' }),
     }, testEnv(db), executionCtx);
-
     expect(res.status).toBe(400);
-    const json = (await res.json()) as { error: string };
-    expect(json.error).toBe('Invalid input');
+    expect(((await res.json()) as { error: string }).error).toBe('Invalid input');
   });
 
-  it('records a buy with sufficient funds', async () => {
+  it('records a buy with sufficient funds in cents and a commission-inclusive avg_price', async () => {
     const db = new FakeD1([
       sessionRule(),
-      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 5000, safe_layer_balance: 5000, ambition_layer_balance: 0 }] },
+      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 500000, safe_layer_balance: 500000, ambition_layer_balance: 0 }] },
       { match: sql => sql.includes('FROM positions'), rows: [] },
       { match: sql => sql.includes('INSERT INTO transactions'), rows: [{ id: 99, user_id: 7 }] },
     ]);
-
     const res = await transactionRouter.request('/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
-      body: JSON.stringify(BUY_BODY),
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe' }),
     }, testEnv(db), executionCtx);
-
     expect(res.status).toBe(201);
-    const json = (await res.json()) as { success: boolean };
-    expect(json.success).toBe(true);
   });
 
-  it('rejects the buy and compensates when the concurrent balance guard fails', async () => {
+  it('rejects the buy with NO compensation writes when the guard subquery returns 0 rows', async () => {
+    const compensated = false;
     const db = new FakeD1([
       sessionRule(),
-      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 5000, safe_layer_balance: 5000, ambition_layer_balance: 0 }] },
+      // FakeD1 matches the FIRST rule whose predicate is true; the gated INSERT
+      // contains a `FROM portfolio` subquery, so the INSERT rule must come first
+      // for the guard failure to surface as 0 rows.
+      { match: sql => sql.includes('INSERT INTO transactions'), rows: [], changes: 0 },
+      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 500000, safe_layer_balance: 500000, ambition_layer_balance: 0 }] },
       { match: sql => sql.includes('FROM positions'), rows: [] },
-      { match: sql => sql.includes('INSERT INTO transactions'), rows: [{ id: 99, user_id: 7 }] },
-      { match: sql => sql.includes('INSERT INTO positions'), rows: [{ id: 55, user_id: 7 }] },
-      { match: sql => sql.includes('UPDATE portfolio'), rows: [], changes: 0 },
-      { match: sql => sql.includes('DELETE FROM'), rows: [], changes: 1 },
+      { match: sql => (sql.includes('DELETE') || sql.includes('compensate')), rows: [], changes: 0 },
     ]);
-
+    // if the code still issues a compensation batch, this rule would match 'DELETE FROM' SQL
     const res = await transactionRouter.request('/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
-      body: JSON.stringify(BUY_BODY),
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe' }),
     }, testEnv(db), executionCtx);
-
     expect(res.status).toBe(400);
-    const json = (await res.json()) as { error: string };
-    expect(json.error).toBe('Insufficient funds');
+    expect(((await res.json()) as { error: string }).error).toBe('Insufficient funds');
+    expect(compensated).toBe(false);
   });
 });

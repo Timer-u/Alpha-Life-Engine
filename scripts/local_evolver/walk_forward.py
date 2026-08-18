@@ -2,8 +2,11 @@
 
 The backtest safe layer runs on real money-market ETFs（回测即实盘宇宙）:
 511360 / 511880 / 511990, the same universe the frontend executes live.
-All series are aligned by explicit trading-date inner-join so a
-suspension/missing day can never silently shift one series against another.
+For the backtest universe all series are aligned by explicit trading-date
+union-join with per-layer availability (late listings get NaN until their
+first bar); any other symbol set is aligned by inner-join across trading
+dates. Either way a suspension/missing day can never silently shift one
+series against another.
 """
 
 import random
@@ -91,11 +94,14 @@ def extract_prices_for_symbols(
     data: MarketDataInput,
     symbols: list[str],
 ) -> list[np.ndarray]:
-    """Explicit date-based alignment (inner join across trading dates).
+    """Explicit date-based alignment across trading dates.
 
-    Replaces the silent ``min(len)`` tail-alignment (C1): every symbol's
-    series is rebuilt on the intersection of its trading dates, in sorted
-    order, so a suspension day cannot shift series against each other.
+    The backtest universe (``BACKTEST_SYMBOLS``) is aligned by union-join
+    with per-layer availability (P1): late listings are padded with NaN
+    until their first bar, and composites renormalize across whatever is
+    available. Any other symbol set is aligned by inner-join (intersection
+    of trading dates). Both replace the silent ``min(len)`` tail-alignment
+    (C1): a suspension day cannot silently shift series against each other.
     """
     if not symbols:
         msg = "no symbols given"
@@ -130,10 +136,59 @@ def extract_prices_for_symbols(
         msg = "no common trading dates across symbols " + ", ".join(symbols)
         raise ValueError(msg)
 
+    if set(symbols) == set(BACKTEST_SYMBOLS):
+        return _union_join_aligned(symbols, by_symbol)
     ordered = sorted(common_dates)
     aligned: list[np.ndarray] = []
     for _, price_by_date in by_symbol:
         aligned.append(np.array([price_by_date[d] for d in ordered], dtype=np.float64))
+    return aligned
+
+
+def _union_join_aligned(
+    symbols: list[str],
+    by_symbol: list[tuple[str, dict[str, float]]],
+) -> list[np.ndarray]:
+    """Union-join over trading dates with per-layer availability (P1).
+
+    Master index = union of every symbol's trading dates, truncated to the
+    first date where BOTH layers have at least one symbol. Symbols that
+    listed later get NaN until their first bar; composites renormalize
+    across whatever is available (as-if backtest, no index proxies).
+    """
+    safe_symbols = set(BACKTEST_SAFE_SYMBOLS)
+    ambition_symbols = set(AMBITION_SYMBOLS)
+    all_dates: set[str] = set()
+    for _, price_by_date in by_symbol:
+        all_dates |= set(price_by_date)
+
+    def layer_first(layer: set[str]) -> str:
+        firsts = [
+            min(price_by_date)
+            for sym, price_by_date in by_symbol
+            if sym in layer and price_by_date
+        ]
+        if not firsts:
+            msg = "backtest layer has no symbols with data"
+            raise ValueError(msg)
+        return min(firsts)
+
+    first_safe = layer_first(safe_symbols)
+    first_ambition = layer_first(ambition_symbols)
+    master_start = max(first_safe, first_ambition)
+    master = sorted(d for d in all_dates if d >= master_start)
+    if not master:
+        msg = "no trading dates after both layers become available"
+        raise ValueError(msg)
+
+    aligned: list[np.ndarray] = []
+    for _, price_by_date in by_symbol:
+        aligned.append(
+            np.array(
+                [price_by_date.get(d, float("nan")) for d in master],
+                dtype=np.float64,
+            )
+        )
     return aligned
 
 
@@ -152,22 +207,41 @@ def _weighted_composite(
     indices: list[int],
     weights: dict[str, float],
 ) -> np.ndarray:
+    """Returns-weighted, chain-linked composite NAV.
+
+    The composite is built from daily RETURNS, not price levels: at day t the
+    composite return is the weight-renormalized average of the day-t returns
+    of the symbols with a finite t-1 price (a late-listed symbol is excluded
+    on its entry day, so there is no one-day price-level jump). The composite
+    NAV is chain-linked from 1.0. A day with no finite symbol returns yields
+    NaN (loud), never a silent 0.
+    """
     base = all_prices[indices[0]]
-    composite = np.zeros(len(base))
-    total = 0.0
-    for idx in indices:
-        w = weights.get(symbols[idx], 0.0)
-        composite += w * all_prices[idx]
-        total += w
-    if total > 0:
-        composite /= total
-    return composite
+    nav = np.full(len(base), np.nan)
+    nav[0] = 1.0
+    for i in range(1, len(base)):
+        total_w = 0.0
+        value = 0.0
+        for idx in indices:
+            w = weights.get(symbols[idx], 0.0)
+            if w <= 0.0:
+                continue
+            prev = all_prices[idx][i - 1]
+            cur = all_prices[idx][i]
+            if np.isfinite(prev) and np.isfinite(cur) and prev > 0.0:
+                value += w * (cur / prev - 1.0)
+                total_w += w
+        if total_w > 0.0:
+            nav[i] = nav[i - 1] * (1.0 + value / total_w)
+    return nav
 
 
 def generate_walk_forward_windows(
     total_obs: int,
     num_windows: int = 6,
     train_ratio: float = 0.7,
+    purge_days: int = 0,
+    embargo_days: int = 0,
 ) -> list[WalkForwardWindow]:
     if num_windows <= 0:
         msg = f"num_windows must be >= 1, got {num_windows}"
@@ -175,9 +249,26 @@ def generate_walk_forward_windows(
     if not 0.0 < train_ratio < 1.0:
         msg = f"train_ratio must be in (0, 1), got {train_ratio}"
         raise ValueError(msg)
+    if purge_days < 0 or embargo_days < 0:
+        msg = f"purge/embargo must be >= 0, got purge={purge_days}, embargo={embargo_days}"
+        raise ValueError(msg)
 
-    windows_per_fold = total_obs // num_windows
+    gap_span = (purge_days + embargo_days) * (num_windows - 1)
+    windows_per_fold = (total_obs - gap_span) // num_windows
+    if windows_per_fold < 1:
+        msg = (
+            f"total_obs ({total_obs}) too small for {num_windows} windows "
+            f"with purge={purge_days} + embargo={embargo_days}"
+        )
+        raise ValueError(msg)
+
     train_size = int(windows_per_fold * train_ratio)
+    if purge_days >= train_size:
+        msg = (
+            f"purge_days ({purge_days}) must be < train_size ({train_size}); "
+            "the purged train window would be empty"
+        )
+        raise ValueError(msg)
     test_size = windows_per_fold - train_size
     if test_size < MIN_OBS_FOR_SHARPE:
         msg = (
@@ -185,18 +276,28 @@ def generate_walk_forward_windows(
             f"need >= {MIN_OBS_FOR_SHARPE} for statistically valid Sharpe/DSR"
         )
         raise ValueError(msg)
+    if test_size <= purge_days + embargo_days:
+        msg = (
+            f"test window {test_size} days must exceed purge+embargo "
+            f"({purge_days}+{embargo_days})"
+        )
+        raise ValueError(msg)
 
     windows: list[WalkForwardWindow] = []
     for w in range(num_windows):
         ws = w * windows_per_fold
-        if ws + test_size > total_obs:
+        train_end = ws + train_size - 1
+        purged_train_end = train_end - purge_days
+        test_start = train_end + 1 + embargo_days
+        test_end = test_start + test_size - 1
+        if test_end > total_obs - 1:
             break
         windows.append(
             WalkForwardWindow(
                 train_start=ws,
-                train_end=ws + train_size - 1,
-                test_start=ws + train_size,
-                test_end=ws + windows_per_fold - 1,
+                train_end=purged_train_end,
+                test_start=test_start,
+                test_end=test_end,
             )
         )
     return windows
@@ -303,6 +404,13 @@ def compute_portfolio_returns_for_params(
         all_prices, symbols, ambition_indices, params.ambition_allocation
     )
 
+    if not np.all(np.isfinite(safe_price)) or not np.all(np.isfinite(ambition_price)):
+        msg = (
+            "composite series contains missing data on the backtest master "
+            "index; check per-symbol listing dates"
+        )
+        raise ValueError(msg)
+
     safe_returns = _prices_to_day_returns(safe_price)
     ambition_returns = _prices_to_day_returns(ambition_price)
 
@@ -383,6 +491,10 @@ def _compute_pbo(
     train_ranks: list[list[int]],
     test_ranks: list[list[int]],
 ) -> tuple[float, list[list[float]]]:
+    """Note: "probability of backtest overfitting" per Bailey et al. (2015) —
+    the fraction of splits where the IS-best configuration lands below the
+    median OOS rank (num_params/2). This is the standard definition.
+    """
     num_params = len(train_ranks)
     num_splits = len(train_ranks[0]) if train_ranks else 0
 
@@ -424,6 +536,8 @@ def run_walk_forward(
     train_ratio: float = 0.7,
     risk_free_rate: float = 0.0,
     alpha: float = 0.05,
+    purge_days: int = 0,
+    embargo_days: int = 0,
     cost_config: TransactionCostConfig | None = None,
     dca_config: DcaConfig | None = None,
 ) -> WalkForwardSummary:
@@ -432,7 +546,9 @@ def run_walk_forward(
     all_prices = extract_prices_for_symbols(data, wf_symbols)
 
     total_obs = len(all_prices[0])
-    windows = generate_walk_forward_windows(total_obs, num_windows, train_ratio)
+    windows = generate_walk_forward_windows(
+        total_obs, num_windows, train_ratio, purge_days, embargo_days
+    )
     param_sets = generate_random_parameter_sets(bounds, num_parameter_sets)
 
     results: list[WalkForwardResult] = []
