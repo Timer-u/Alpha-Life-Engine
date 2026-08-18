@@ -20,13 +20,18 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
+import {
+  asiaShanghaiDate,
+  detectMissingTradingDays,
+  isTradingDay,
+  shiftDate,
+} from '../src/lib/trading-calendar';
+
 import { createAkshareFetchScript } from './akshare-fetch';
 import {
   asiaShanghaiToday,
   baoCodeToCsvName,
-  isAsiaShanghaiWeekday,
   resolvePythonCommand,
-  shiftDate,
   symbolFromCode,
   TRACKED_SYMBOLS,
 } from './symbols';
@@ -271,12 +276,14 @@ export async function dailyMarketUpdate(): Promise<void> {
 
   try {
     console.log(`  Date (Asia/Shanghai): ${asiaShanghaiToday()}  ` +
-      `weekday: ${isAsiaShanghaiWeekday()}  env: ${env}  db: ${dbName}`);
+      `trading_day: ${isTradingDay(asiaShanghaiDate())}  env: ${env}  db: ${dbName}`);
     console.log(`  Symbols: ${TRACKED_SYMBOLS.map(s => s.code).join(', ')}`);
     console.log('');
 
     console.log('Step 1: Determine per-symbol fetch windows (D1 high-water marks)');
     const marks = queryHighWaterMarks(dbName, env);
+    const missingLines = detectMissingTradingDays(marks, asiaShanghaiDate());
+    for (const line of missingLines) console.warn(`  ${line}`);
     const windows = computeWindows(marks);
     for (const sym of TRACKED_SYMBOLS) {
       const bare = symbolFromCode(sym.code);
@@ -293,15 +300,13 @@ export async function dailyMarketUpdate(): Promise<void> {
     const data = fetchDataViaPython(outputDir, windows);
 
     if (data.length === 0) {
-      if (isAsiaShanghaiWeekday()) {
+      if (isTradingDay(asiaShanghaiDate())) {
         throw new Error(
-          'No new market data for any tracked symbol on an Asia/Shanghai weekday. ' +
-            'Expected on Chinese market holidays (CNY, National Day, etc.), but a real trading ' +
-            'calendar is P1/out of scope so an empty weekday result is treated as a failure. ' +
+          'No new market data for any tracked symbol on a trading day. ' +
             'If today is a trading day, the data source or the pipeline is down.'
         );
       }
-      console.log('   No new data (Asia/Shanghai weekend — market closed, expected). Update skipped.');
+      console.log('   No new data (non-trading day — market closed, expected). Update skipped.');
       console.log('');
       console.log('='.repeat(50));
       console.log('Update completed (no changes)');
