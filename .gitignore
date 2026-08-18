@@ -47,3 +47,6 @@ __pycache__/
 data/market_data/*.csv
 data/market_data/*.py
 data/market_data/*.sql
+
+.worktrees/
+
