@@ -15,11 +15,17 @@
  * Unknown flags are rejected loudly (never silently ignored).
  */
 
+import type { MarketRow } from '../src/lib/market-validation';
+
 import { execSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
+import {
+  findMissingSymbols,
+  parseMarketCsv,
+} from '../src/lib/market-validation';
 import {
   asiaShanghaiDate,
   detectMissingTradingDays,
@@ -49,16 +55,6 @@ type Env = 'development' | 'production';
 interface CliOptions {
   env: Env;
   dbName: string;
-}
-
-interface MarketRow {
-  symbol: string;
-  date: string;
-  open: number | null;
-  high: number | null;
-  low: number | null;
-  close: number | null;
-  volume: number;
 }
 
 interface PythonSummary {
@@ -146,7 +142,7 @@ function generateInsertSql(data: MarketRow[]): string {
       .map(
         row =>
           `('${row.symbol}', '${row.date}', ${row.open ?? 'NULL'}, ${row.high ?? 'NULL'}, ` +
-          `${row.low ?? 'NULL'}, ${row.close ?? 'NULL'}, ${row.volume})`
+          `${row.low ?? 'NULL'}, ${row.close}, ${row.volume})`
       )
       .join(',');
     lines.push(
@@ -224,27 +220,16 @@ function fetchDataViaPython(
     if (!returnedSymbols.has(bare)) continue;
     const csvFile = resolve(outputDir, `${baoCodeToCsvName(sym.code)}.csv`);
     if (!existsSync(csvFile)) continue;
-
     const csv = readFileSync(csvFile, 'utf8');
-    const rows = csv.split('\n').slice(1).filter(r => r.trim());
-    for (const row of rows) {
-      const cols = row.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
-      if (cols.length < 6) continue;
-      const [date, code, open, high, low, close, volume] = cols;
-      if (!date || !close) continue;
-      allData.push({
-        symbol: code.replace('sh.', '').replace('sz.', ''),
-        date,
-        open: open ? parseFloat(open) : null,
-        high: high ? parseFloat(high) : null,
-        low: low ? parseFloat(low) : null,
-        close: parseFloat(close),
-        volume: volume ? parseInt(volume, 10) : 0,
-      });
-    }
+    allData.push(...parseMarketCsv(csv));
   }
 
-  console.log(`     Retrieved ${parsed.count} records`);
+  const missingSymbols = findMissingSymbols(allData.map(r => r.symbol), TRACKED_SYMBOLS.map(s => symbolFromCode(s.code)));
+  if (missingSymbols.length > 0) {
+    throw new Error(`Market data missing for symbol(s): ${missingSymbols.join(', ')}`);
+  }
+
+  console.log(`     Retrieved ${allData.length} records`);
   const seen = new Set<string>();
   return allData.filter(row => {
     const key = `${row.symbol}|${row.date}`;

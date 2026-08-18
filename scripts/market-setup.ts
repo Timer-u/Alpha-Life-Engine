@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 
+import type { MarketRow } from '../src/lib/market-validation';
 import type { TrackedSymbol } from './symbols';
 
 import { execSync } from 'child_process';
-import { writeFileSync, mkdirSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
+import { findMissingSymbols, parseMarketCsv } from '../src/lib/market-validation';
+
 import { createAkshareFetchScript } from './akshare-fetch';
-import { resolvePythonCommand, symbolFromCode, TRACKED_SYMBOLS } from './symbols';
+import { resolvePythonCommand, TRACKED_SYMBOLS } from './symbols';
 
 interface MarketSetupConfig {
   codes: readonly TrackedSymbol[];
@@ -30,33 +33,28 @@ function generateImportSql(config: MarketSetupConfig): void {
     '',
   ];
 
+  const allRows: MarketRow[] = [];
   for (const etf of config.codes) {
     const csvFile = resolve(config.outputDir, `${etf.code.replace('.', '_')}.csv`);
-    try {
-      const csv = readFileSync(csvFile, 'utf8');
-      const rows = csv.split('\n').slice(1).filter(r => r.trim());
-      const batchRows: string[] = [];
-      for (const row of rows) {
-        const cols = row.split(',');
-        if (cols.length < 6) continue;
-        const [date, code, open, high, low, close, volume, _amount] = cols.map(c => c.trim());
-        if (!date || !close) continue;
-        // Extract symbol: remove 'sh.' or 'sz.' prefix
-        const symbol = symbolFromCode(code);
-        batchRows.push(
-          `('${symbol}', '${date}', ${open || 'NULL'}, ${high || 'NULL'}, ${low || 'NULL'}, ${close || 'NULL'}, ${volume || '0'})`
-        );
-      }
-      const chunkSize = 500;
-      for (let i = 0; i < batchRows.length; i += chunkSize) {
-        const chunk = batchRows.slice(i, i + chunkSize);
-        lines.push(`INSERT OR IGNORE INTO market_data (symbol, date, open, high, low, close, volume) VALUES ${chunk.join(',')};`);
-      }
-      console.log(`   ${etf.name} (${etf.code}): ${batchRows.length} records`);
-    } catch {
-      console.log(`   WARNING: ${etf.name} CSV not found, skipped`);
+    if (!existsSync(csvFile)) {
+      throw new Error(`${etf.name} CSV not found: ${csvFile} — market setup must cover all 6 tracked symbols`);
     }
+    const csv = readFileSync(csvFile, 'utf8');
+    const rows = parseMarketCsv(csv);
+    allRows.push(...rows);
+    const chunkSize = 500;
+    for (let i = 0; i < rows.length; i += chunkSize) {
+      const chunk = rows.slice(i, i + chunkSize);
+      lines.push(`INSERT OR IGNORE INTO market_data (symbol, date, open, high, low, close, volume) VALUES ${chunk
+        .map(r => `('${r.symbol}', '${r.date}', ${r.open ?? 'NULL'}, ${r.high ?? 'NULL'}, ${r.low ?? 'NULL'}, ${r.close}, ${r.volume})`)
+        .join(',')};`);
+    }
+    console.log(`   ${etf.name} (${etf.code}): ${rows.length} records`);
   }
+
+  const expected = config.codes.map(c => c.code.replace(/^(sh|sz)\./, ''));
+  const missing = findMissingSymbols(allRows.map(r => r.symbol), expected);
+  if (missing.length > 0) throw new Error(`Market data missing for symbol(s): ${missing.join(', ')}`);
 
   writeFileSync(sqlPath, lines.join('\n'), 'utf8');
   console.log(`SQL import file generated: ${sqlPath}`);
