@@ -3,6 +3,8 @@ import type { Env, Variables } from './[[route]]';
 import { Hono } from 'hono';
 import { z } from 'zod';
 
+import { centsToYuan } from '../../src/lib/money';
+
 import { sessionMiddleware } from './auth';
 import { clampRatio, resolveActiveParams } from './lch-utils';
 
@@ -46,7 +48,7 @@ interface PortfolioRow {
   ambition_layer_balance: number;
 }
 
-/** 系统侧总资产 = 资金池现金 + 持仓市值（按最新收盘价估值） */
+/** 系统侧总资产 = 资金池现金 + 持仓市值（按最新收盘价估值），单位分 */
 async function computeSystemState(db: D1Database, userId: number): Promise<{
   cash: PortfolioRow;
   holdingsValue: number;
@@ -78,9 +80,11 @@ async function computeSystemState(db: D1Database, userId: number): Promise<{
       const price = priceMap.get(pos.symbol) ?? pos.current_price;
       holdingsValue += pos.shares * price;
     }
+    holdingsValue = Math.round(holdingsValue * 100);
   }
 
-  return { cash, holdingsValue: round2(holdingsValue), systemTotal: round2(cash.total_balance + holdingsValue) };
+  const systemTotal = cash.total_balance + holdingsValue;
+  return { cash, holdingsValue, systemTotal };
 }
 
 export function variancePct(variance: number, base: number): number {
@@ -107,11 +111,11 @@ reconciliationRouter.get('/', async (c) => {
 
 const reconciliationSchema = z.object({
   reconciliation_date: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, '月份格式应为 YYYY-MM'),
-  broker_balance: z.number().min(0),
-  deposits: z.number().min(0).optional(),
-  withdrawals: z.number().min(0).optional(),
-  gains: z.number().optional(),
-  fees: z.number().min(0).optional(),
+  broker_balance: z.number().int().min(0),
+  deposits: z.number().int().min(0).optional(),
+  withdrawals: z.number().int().min(0).optional(),
+  gains: z.number().int().optional(),
+  fees: z.number().int().min(0).optional(),
   notes: z.string().max(500).optional(),
 });
 
@@ -134,7 +138,7 @@ reconciliationRouter.post('/', async (c) => {
     const now = nowIso();
 
     const { cash, holdingsValue, systemTotal } = await computeSystemState(db, userId);
-    const variance = round2(data.broker_balance - systemTotal);
+    const variance = data.broker_balance - systemTotal;
     const pct = variancePct(variance, systemTotal);
     const needsCalibration = pct > CALIBRATION_THRESHOLD;
     const status: ReconciliationRow['status'] = needsCalibration ? 'PENDING' : 'CONFIRMED';
@@ -210,7 +214,7 @@ reconciliationRouter.post('/:id/calibrate', async (c) => {
     }
 
     const { cash, holdingsValue } = await computeSystemState(db, userId);
-    const targetCash = Math.max(round2(rec.ending_balance - holdingsValue), 0);
+    const targetCash = Math.max(rec.ending_balance - holdingsValue, 0);
 
     // 现金按层级现有占比分摊；占比钳位到 [0,1]，防止不一致余额产生负层现金。
     // 现金池为空时退回 LCH/演化比例
@@ -221,8 +225,8 @@ reconciliationRouter.post('/:id/calibrate', async (c) => {
       const { allocation } = await resolveActiveParams(db, userId);
       safeRatio = clampRatio(allocation?.safe_ratio ?? 0.6);
     }
-    const newSafe = round2(targetCash * safeRatio);
-    const newAmbition = round2(targetCash - newSafe);
+    const newSafe = Math.floor(targetCash * safeRatio);
+    const newAmbition = targetCash - newSafe;
 
     await db.batch([
       db.prepare(
@@ -231,14 +235,22 @@ reconciliationRouter.post('/:id/calibrate', async (c) => {
       db.prepare(
         'UPDATE reconciliations SET status = ?, updated_at = ? WHERE id = ?'
       ).bind('CONFIRMED', now, id),
+      db.prepare(
+        `INSERT INTO audit_logs (user_id, action, entity, old_value, new_value, created_at) VALUES (?, 'calibrate', 'portfolio', ?, ?, ?)`
+      ).bind(
+        userId,
+        JSON.stringify({ total_balance: cash.total_balance, safe_layer_balance: cash.safe_layer_balance, ambition_layer_balance: cash.ambition_layer_balance }),
+        JSON.stringify({ total_balance: targetCash, safe_layer_balance: newSafe, ambition_layer_balance: newAmbition }),
+        now
+      ),
     ]);
 
     // 校准按定义把差异全部吸收进资金池现金，持仓构成可能仍与实际不符，需向用户明示
     const diffAbs = Math.abs(rec.variance);
     const warnings: string[] = [
       rec.variance >= 0
-        ? `券商总资产高于系统 ${diffAbs.toFixed(2)} 元，差额已并入资金池现金`
-        : `系统总资产高于券商 ${diffAbs.toFixed(2)} 元，差额已从资金池现金扣除`,
+        ? `券商总资产高于系统 ${centsToYuan(diffAbs).toFixed(2)} 元，差额已并入资金池现金`
+        : `系统总资产高于券商 ${centsToYuan(diffAbs).toFixed(2)} 元，差额已从资金池现金扣除`,
       '若差异实际源于券商侧买卖未被系统记录，请先核对持仓明细，否则校准后资产构成可能与实际不符',
     ];
 
@@ -251,10 +263,10 @@ reconciliationRouter.post('/:id/calibrate', async (c) => {
           ambition_layer_balance: newAmbition,
         },
         holdings_value: holdingsValue,
-        system_total: round2(targetCash + holdingsValue),
+        system_total: targetCash + holdingsValue,
         warnings,
       },
-      message: `已校准：资金池现金调整为 ¥${targetCash.toFixed(2)}（安全层 ¥${newSafe.toFixed(2)} / 进取层 ¥${newAmbition.toFixed(2)}）`,
+      message: `已校准：资金池现金调整为 ¥${centsToYuan(targetCash).toFixed(2)}（安全层 ¥${centsToYuan(newSafe).toFixed(2)} / 进取层 ¥${centsToYuan(newAmbition).toFixed(2)}）`,
       timestamp: now,
     });
   } catch (error) {

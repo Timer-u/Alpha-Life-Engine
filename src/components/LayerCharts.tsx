@@ -5,6 +5,7 @@ import ReactECharts from 'echarts-for-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 
 import { useLayerPerformance } from '../hooks/usePortfolio';
+import { formatCents } from '../lib/money';
 
 interface Props {
   positions: Position[];
@@ -50,7 +51,7 @@ export default function LayerCharts({ positions }: Props) {
         itemStyle: { color: SAFE_COLOR },
         lineStyle: { color: SAFE_COLOR, width: 2 },
         areaStyle: { color: SAFE_COLOR, opacity: 0.06 },
-        data: (performance?.safe ?? []).map(p => [p.date, p.cumulative_gain]),
+        data: (performance?.safe ?? []).map(p => [p.date, p.cumulative_gain / 100]),
       },
       {
         name: '进取层',
@@ -60,7 +61,7 @@ export default function LayerCharts({ positions }: Props) {
         itemStyle: { color: AMBITION_COLOR },
         lineStyle: { color: AMBITION_COLOR, width: 2 },
         areaStyle: { color: AMBITION_COLOR, opacity: 0.06 },
-        data: (performance?.ambition ?? []).map(p => [p.date, p.cumulative_gain]),
+        data: (performance?.ambition ?? []).map(p => [p.date, p.cumulative_gain / 100]),
       },
     ],
   };
@@ -79,7 +80,7 @@ export default function LayerCharts({ positions }: Props) {
         itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
         label: { show: false },
         emphasis: { label: { show: true, fontWeight: 'bold' } },
-        data: ambitionPositions.map(p => ({ name: p.symbol + ' ' + p.name, value: Math.round(p.market_value * 100) / 100 })),
+        data: ambitionPositions.map(p => ({ name: p.symbol + ' ' + p.name, value: Math.round(p.market_value / 100) })),
       },
     ],
   };
@@ -103,10 +104,10 @@ export default function LayerCharts({ positions }: Props) {
           {hasSeries && (
             <div className="flex items-center gap-4 text-xs font-mono">
               <span className={latestSafeGain >= 0 ? 'text-success-600' : 'text-danger-600'}>
-                安全层 {latestSafeGain >= 0 ? '+' : ''}{latestSafeGain.toFixed(2)}
+                安全层 {formatCents(latestSafeGain, { sign: true })}
               </span>
               <span className={latestAmbitionGain >= 0 ? 'text-primary-600' : 'text-danger-600'}>
-                进取层 {latestAmbitionGain >= 0 ? '+' : ''}{latestAmbitionGain.toFixed(2)}
+                进取层 {formatCents(latestAmbitionGain, { sign: true })}
               </span>
             </div>
           )}

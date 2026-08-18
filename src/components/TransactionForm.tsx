@@ -5,6 +5,7 @@ import { useCallback, useState } from 'react';
 
 import { usePortfolio } from '../hooks/usePortfolio';
 import { useToast } from '../hooks/useToast';
+import { yuanToCents } from '../lib/money';
 
 import SellConfirmModal from './SellConfirmModal';
 
@@ -60,7 +61,7 @@ export default function TransactionForm({ onSuccess }: Props) {
     if (amount > 0) {
       try {
         const result = await calculateCommission(amount);
-        setCommission(result.commission.toFixed(2));
+        setCommission((result.commission_cents / 100).toFixed(2));
       } catch {
         setCommission(Math.max(amount * 0.0003, 5).toFixed(2));
       }
@@ -69,7 +70,7 @@ export default function TransactionForm({ onSuccess }: Props) {
 
   const doSubmit = async () => {
     setError('');
-    const formCommission = commission ? parseFloat(commission) : Math.max(amount * 0.0003, 5);
+    const formCommission = commission ? yuanToCents(parseFloat(commission)) : yuanToCents(Math.max(amount * 0.0003, 5));
 
     try {
       await createTransaction({
@@ -199,7 +200,7 @@ export default function TransactionForm({ onSuccess }: Props) {
             confirmCode={sellConfirmCode}
             symbol={symbol}
             shares={parseFloat(shares) || 0}
-            amount={amount}
+            amount={yuanToCents(amount)}
             submitting={isCreating}
             onConfirm={doSubmit}
             onCancel={() => setSellConfirmCode(null)}

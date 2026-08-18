@@ -6,6 +6,8 @@ import { isApiResponse } from '../types/api';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
+// All money fields below (broker_balance / deposits / withdrawals / gains / fees)
+// are integer CENTS. The Reconciliation page converts yuan inputs before calling create.
 export interface CreateReconciliationInput {
   reconciliation_date: string;
   broker_balance: number;

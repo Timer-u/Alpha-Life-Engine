@@ -168,6 +168,11 @@ def compute_dsr(
 def compute_haircut_sharpe(sr: float, n_trials: int) -> float:
     """Bailey-Lopez de Prado haircut Sharpe ratio.
     对多重测试偏差进行惩罚：Sharpe 越高、试验次数越多，惩罚越显著。
+
+    Note: this is the standard Bailey & López de Prado (2014) expected-max
+    Sharpe haircut: E[max] approximated analytically over N trials times a
+    heuristic variance term 1/sqrt(N). It is an approximation; the exact
+    deflated Sharpe ratio uses the full E[max] distribution.
     """
     if n_trials <= 1:
         return sr
@@ -244,9 +249,12 @@ def bootstrap_ci(
 
     sharpes = np.array([compute_sharpe_ratio(b, risk_free_rate) for b in boot])
     sortinos = np.array([compute_sortino_ratio(b, risk_free_rate) for b in boot])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        dd_ratios = [
+            (np.maximum.accumulate(b) - b) / np.maximum.accumulate(b) for b in boot
+        ]
     maxdds = np.array([
-        float(np.min((np.maximum.accumulate(b) - b) / np.maximum.accumulate(b)))
-        for b in boot
+        float(np.min(np.where(np.isfinite(dd), dd, 0.0))) for dd in dd_ratios
     ])
 
     def _ci(arr: np.ndarray, level: float) -> tuple[float, float]:

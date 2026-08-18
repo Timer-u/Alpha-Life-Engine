@@ -191,6 +191,7 @@ class TransactionCostConfig:
     etf_bps: float = 3.0  # ETF 万分之三佣金（含规费、过户费），建议 2-5 bps
     etf_min_yuan: float = 5.0  # 单笔最低佣金 5 元（默认不免五元）；若券商免五元则改为 0
     mmf_bps: float = 0.0  # 货币 ETF（511360/511880/511990）零成本假设，佣金按成交额收取
+    etf_spread: float = 0.002  # ETF 折溢价近似：买入价 = close * (1 + spread/2)
 
 
 @dataclass
@@ -199,6 +200,8 @@ class DcaConfig:
 
     monthly_contribution: float = 1000.0  # 每月定投金额（元）
     contribution_freq_days: int = 21  # 定投间隔（交易日）
+    price_limit: float = 0.10  # 涨停幅度：当日涨幅 >= 此值无法买入
+    lot_size: int = 100  # 整手股数（100 股一手）
 
 
 @dataclass
@@ -224,6 +227,7 @@ class EvolverConfig:
         default_factory=TransactionCostConfig
     )
     dca: DcaConfig = field(default_factory=DcaConfig)
+    mc_estimate_window_days: int = 252  # MC 均值/波动/协方差估计窗口（交易日）
 
 
 DEFAULT_EVOLVER_CONFIG = EvolverConfig()

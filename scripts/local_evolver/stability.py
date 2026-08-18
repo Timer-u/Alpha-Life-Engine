@@ -27,6 +27,8 @@ from walk_forward import (
     resolve_backtest_symbols,
 )
 
+RHO_EPSILON = 1e-12
+
 
 def _perturb_weights(
     weights: dict[str, float],
@@ -52,6 +54,25 @@ def _perturb_weights(
             result[k] /= total
 
     return result
+
+
+def _perturb_split(
+    safe_ratio: float, ambition_ratio: float, delta: float
+) -> tuple[float, float]:
+    """Perturb the safe/ambition split while preserving their sum (=1).
+
+    Perturbing either ratio alone breaks the sum constraint and silently
+    tests leverage; perturbing the fraction rho = safe/(safe+ambition)
+    keeps the split on the simplex.
+    """
+    total = safe_ratio + ambition_ratio
+    if total <= 0:
+        return safe_ratio, ambition_ratio
+    rho = safe_ratio / total
+    new_rho = min(1.0, max(0.0, rho + delta))
+    if abs(new_rho - rho) < RHO_EPSILON:
+        return safe_ratio, ambition_ratio
+    return new_rho * total, (1.0 - new_rho) * total
 
 
 def _perturb_size(base_val: float | int, radius: float) -> float:
@@ -146,8 +167,6 @@ def check_stability(
     # Scalar parameters
     scalar_params: list[tuple[str, float | int]] = [
         ("trigger_line", params.trigger_line),
-        ("safe_ratio", params.safe_ratio),
-        ("ambition_ratio", params.ambition_ratio),
         ("bsm_threshold", params.bsm_threshold),
         ("ma_short_window", params.ma_short_window),
         ("ma_long_window", params.ma_long_window),
@@ -164,6 +183,20 @@ def check_stability(
         )
         neighborhood_sharpes.extend(sharpes)
         gradients.extend(grads)
+
+    # safe/ambition split: joint perturbation preserving sum = 1
+    for delta in (neighborhood_radius, -neighborhood_radius):
+        new_safe, new_amb = _perturb_split(
+            params.safe_ratio, params.ambition_ratio, delta
+        )
+        if (new_safe, new_amb) == (params.safe_ratio, params.ambition_ratio):
+            continue
+        shifted = copy.deepcopy(params)
+        shifted.safe_ratio = new_safe
+        shifted.ambition_ratio = new_amb
+        score = _score(shifted)
+        neighborhood_sharpes.append(score)
+        gradients.append(abs(score - base_sharpe) / neighborhood_radius)
 
     for weights_name, weights in (
         ("safe_allocation", params.safe_allocation),

@@ -12,6 +12,7 @@ from config import (
     load_regime_lookback,
     load_synthetic_n_paths,
 )
+from constants import MIN_OBS_FOR_BOOTSTRAP
 from cpcv import generate_cpcv_folds
 from dsr import bootstrap_ci, compute_sharpe_ratio
 from models import (
@@ -29,6 +30,7 @@ from models import (
     StrategyParameterSet,
     StrategyReportData,
     SyntheticScenarioResult,
+    WalkForwardSummary,
 )
 from monte_carlo import run_monte_carlo
 from mpt import (
@@ -47,6 +49,55 @@ from walk_forward import (
 )
 
 
+def compute_bootstrap_from_walk_forward(
+    data: MarketDataInput,
+    symbols: list[str],
+    wf_summary: WalkForwardSummary,
+    recommended: StrategyParameterSet,
+    config: EvolverConfig,
+    risk_free_rate: float = 0.025,
+) -> dict:
+    """Block-bootstrap CI of the recommended strategy's OOS DCA daily returns.
+
+    Bootstrapping the MC terminal cross-section (per-path final returns) is
+    meaningless — it has no temporal structure. The strategy's actual
+    out-of-sample daily return series (recommended walk-forward test window)
+    carries real autocorrelation, which block bootstrap is designed for.
+
+    The recommended strategy is matched against the walk-forward results by
+    dataclass equality, so the bootstrapped window is always the OOS window of
+    the strategy the report actually recommends (including the PBO/stability
+    override path, where the default best-by-DSR selection would point at a
+    different — potentially unstable — strategy).
+    """
+    best = next(
+        (r for r in wf_summary.results if r.optimal_params == recommended), None
+    )
+    if best is None:
+        return {}
+
+    all_prices = extract_prices_for_symbols(data, symbols)
+    oos_returns = compute_portfolio_returns_for_params(
+        symbols,
+        all_prices,
+        best.window.test_start,
+        best.window.test_end,
+        best.optimal_params,
+        config.transaction_costs,
+        config.dca,
+    )
+    if len(oos_returns) < MIN_OBS_FOR_BOOTSTRAP:
+        return {}
+
+    bc = load_bootstrap_config()
+    return bootstrap_ci(
+        oos_returns,
+        n_resamples=bc.get("n_resamples", 1000),
+        block_size=bc.get("block_size", 5),
+        risk_free_rate=risk_free_rate / 252,
+    )
+
+
 def generate_report(
     data: MarketDataInput,
     symbols: list[str],
@@ -62,9 +113,12 @@ def generate_report(
 
     timestamp = __import__("datetime").datetime.now().isoformat()
 
-    first_symbol = symbols[0]
-    total_obs = (
-        len(data.symbols[first_symbol].close) if first_symbol in data.symbols else 0
+    # total_obs must be the SAME min-length source the windowed MPT statistics
+    # validate against (min over symbols of len(close)); symbols[0] is not
+    # guaranteed to be the shortest series.
+    total_obs = min(
+        (len(data.symbols[s].close) for s in symbols if s in data.symbols),
+        default=0,
     )
 
     num_groups = 10
@@ -112,6 +166,7 @@ def generate_report(
             initial_prices,
             config.gbm_days,
             config.gbm_paths,
+            estimate_window_days=config.mc_estimate_window_days,
         )
 
     # === Walk-Forward with transaction costs ===
@@ -124,6 +179,8 @@ def generate_report(
         config.walk_forward_train_ratio,
         risk_free_rate / 252,
         config.dsr_alpha,
+        purge_days=config.purge_days,
+        embargo_days=config.embargo_days,
         cost_config=config.transaction_costs,
     )
 
@@ -170,22 +227,10 @@ def generate_report(
             recommended = stable_with_check[0].optimal_params
             stability.is_stable = True
 
-    # === Bootstrap CI ===
-    bootstrap_result = {}
-    if max_sharpe_weights is not None and mc_result.paths.returns:
-        last_returns = (
-            np.array(mc_result.paths.returns[-1])
-            if mc_result.paths.returns and len(mc_result.paths.returns) > 0
-            else np.array([])
-        )
-        if len(last_returns) > 10:
-            bc = load_bootstrap_config()
-            bootstrap_result = bootstrap_ci(
-                last_returns,
-                n_resamples=bc.get("n_resamples", 1000),
-                block_size=bc.get("block_size", 5),
-                risk_free_rate=risk_free_rate / 252,
-            )
+    # === Bootstrap CI (block bootstrap on the recommended strategy's OOS returns) ===
+    bootstrap_result = compute_bootstrap_from_walk_forward(
+        data, symbols, wf_summary, recommended, config, risk_free_rate
+    )
 
     # === MRC (Marginal Risk Contribution) ===
     mrc_result = MRCResult()

@@ -26,6 +26,13 @@ def test_cholesky_decomposition_non_psd(device):
     assert torch.isfinite(L).all()
 
 
+def test_cholesky_decomposition_non_psd_cpu():
+    matrix = torch.tensor([[1.0, 1.5], [1.5, 1.0]], device="cpu")
+    L = cholesky_decomposition(matrix)
+    assert L.shape == (2, 2)
+    assert torch.isfinite(L).all()
+
+
 def test_covariance_to_correlation(device):
     cov = torch.tensor([[0.04, 0.02], [0.02, 0.01]], device=device)
     corr, std = covariance_to_correlation(cov)
@@ -94,3 +101,17 @@ def test_run_monte_carlo(sample_market_data):
     assert len(result.paths.dates) == 11
     assert isinstance(cvar, CVaRResult)
     assert isinstance(dd, DrawdownAnalytics)
+
+
+def test_max_drawdown_uses_robust_quantile(device):
+    # 99 条温和下跌路径 + 1 条灾难路径：max_dd 应为 5% 分位数 ≈ 温和值
+    n_paths, days = 100, 10
+    values = torch.zeros(n_paths, days + 1, device=device)
+    values[:, 0] = 100.0
+    for i in range(days):
+        values[:, i + 1] = values[:, i] * (1 - 0.005)  # 温和 -0.5%/日
+    values[0] = values[0, 0] * (1 - 0.9) ** torch.arange(days + 1, device=device)
+    returns = values / values[:, 0:1] - 1.0
+    summary, _, dd = compute_monte_carlo_summary(returns, values)
+    assert summary.max_drawdown > -0.5  # 旧实现取最差路径 → ≈ -0.9
+    assert dd.max_drawdown > -0.5
