@@ -74,7 +74,15 @@ def generate_cpcv_folds(
 
 def compute_returns_from_prices(prices: list[float]) -> np.ndarray:
     arr = np.array(prices, dtype=np.float64)
-    return arr[1:] / arr[:-1] - 1.0
+    if len(arr) < 2:
+        return np.array([])
+    if not np.all(np.isfinite(arr)) or np.any(arr <= 0):
+        return np.array([])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        returns = arr[1:] / arr[:-1] - 1.0
+    if not np.all(np.isfinite(returns)):
+        return np.array([])
+    return returns
 
 
 def compute_portfolio_returns(

@@ -21,6 +21,8 @@
     "database:import-market": "wrangler d1 execute alpha-life-dev --file=./data/market_data/import_market_data.sql --local",
     "database:import-market:prod": "wrangler d1 execute alpha-life-prod --file=./data/market_data/import_market_data.sql --remote",
     "market:update:prod": "tsx scripts/daily-market-update.ts --prod",
+    "backfill:realized": "tsx scripts/backfill-realized-pnl.ts",
+    "backfill:realized:prod": "tsx scripts/backfill-realized-pnl.ts --prod",
     "types": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -1,6 +1,8 @@
 // 邮件发送与通知记录工具（Resend）
 // RESEND_API_KEY 未配置时降级为控制台输出（与 OTP 邮件行为一致）
 
+import { formatCents } from '../../src/lib/money';
+
 const FROM_ADDRESS = 'no-reply@alpha-life.yourdomain.com';
 
 export type NotificationType = 'strategy_expiry' | 'execution_suggestion';
@@ -58,10 +60,10 @@ export function executionSuggestionEmailHtml(p: ExecutionSuggestionParams): stri
   return emailShell('执行建议：触发条件已满足', `
     <p style="color:#374151;">${p.message}</p>
     <table style="width:100%;border-collapse:collapse;font-size:14px;color:#374151;">
-      <tr><td style="padding:6px 0;color:#6b7280;">建议执行金额</td><td style="text-align:right;font-weight:bold;">¥${p.executedAmount.toFixed(2)}</td></tr>
-      <tr><td style="padding:6px 0;color:#6b7280;">安全层</td><td style="text-align:right;color:#16a34a;">¥${p.safeAmount.toFixed(2)}</td></tr>
-      <tr><td style="padding:6px 0;color:#6b7280;">进取层</td><td style="text-align:right;color:#2563eb;">¥${p.ambitionAmount.toFixed(2)}</td></tr>
-      <tr><td style="padding:6px 0;color:#6b7280;">预估佣金</td><td style="text-align:right;">¥${p.commission.toFixed(2)}</td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">建议执行金额</td><td style="text-align:right;font-weight:bold;">${formatCents(p.executedAmount)}</td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">安全层</td><td style="text-align:right;color:#16a34a;">${formatCents(p.safeAmount)}</td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">进取层</td><td style="text-align:right;color:#2563eb;">${formatCents(p.ambitionAmount)}</td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">预估佣金</td><td style="text-align:right;">${formatCents(p.commission)}</td></tr>
       <tr><td style="padding:6px 0;color:#6b7280;">安全层标的</td><td style="text-align:right;font-family:monospace;">${p.nextSafeEtf} ${p.nextSafeEtfName}</td></tr>
     </table>
     <p style="color:#6b7280;font-size:14px;">请在券商 App 中执行后，回到系统记录交易。</p>

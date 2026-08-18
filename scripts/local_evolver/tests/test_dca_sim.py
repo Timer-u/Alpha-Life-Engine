@@ -31,8 +31,10 @@ def _params(
     )
 
 
-def _cost(*, bps: float = 3.0, min_yuan: float = 5.0) -> TransactionCostConfig:
-    return TransactionCostConfig(etf_bps=bps, etf_min_yuan=min_yuan)
+def _cost(
+    *, bps: float = 3.0, min_yuan: float = 5.0, spread: float = 0.002
+) -> TransactionCostConfig:
+    return TransactionCostConfig(etf_bps=bps, etf_min_yuan=min_yuan, etf_spread=spread)
 
 
 def _dca(monthly: float = 1000.0, freq: int = 21) -> DcaConfig:
@@ -174,7 +176,14 @@ def test_simulate_dca_twr_flat_market_no_cost():
     prices = np.ones(length)
     p = _params()
     out = simulate_dca(
-        flat, flat, prices, p, _cost(bps=0.0, min_yuan=0.0), _dca(), 0, length - 1
+        flat,
+        flat,
+        prices,
+        p,
+        _cost(bps=0.0, min_yuan=0.0, spread=0.0),
+        _dca(),
+        0,
+        length - 1,
     )
     assert len(out.returns) == length
     assert float(np.max(np.abs(out.returns))) < 1e-12
@@ -239,3 +248,96 @@ def test_simulate_dca_trigger_and_bsm_change_execution_timing():
         safe_returns, amb_returns, amb_prices, p_bsm_hi, _cost(), dca, 0, length - 1
     )
     assert o3.num_executions != o4.num_executions
+
+
+def test_execution_uses_lot_rounding_and_spread_price():
+    length = 120
+    flat = np.zeros(length)
+    prices = np.ones(length) * 4.05
+    p = _params()
+    dca = _dca(monthly=2000.0)
+    out = simulate_dca(flat, flat, prices, p, _cost(bps=300.0), dca, 0, length - 1)
+    assert out.num_executions > 0
+    # 执行价 = 4.05 * (1 + 0.002/2) = 4.05405
+    # 整手: floor(666.8 / 4.05405 / 100) * 100 = 100 股 → actual = 405.405
+    # 佣金 = max(405.405 * 3%, 5) = 12.16215/笔（3% 佣金使整手差异被放大）
+    per_exec = 4.05 * 1.001 * 100 * 0.03
+    assert out.total_commission == pytest.approx(
+        per_exec * out.num_executions, rel=1e-9
+    )
+
+
+def test_spread_is_realized_cost_not_ambition_subsidy():
+    # 与上面同市场/参数，唯一差异是 etf_spread。佣金归零以隔离价差效应：
+    # 修复前 pending_ambition += actual（价差又回流进取层）→ 两种 spread 下
+    # final_nav 相等；修复后进取层按 fair value 入账 → 价差成为已实现成本，
+    # final_nav(spread=0.002) 严格低于 final_nav(spread=0.0)。
+    length = 120
+    flat = np.zeros(length)
+    prices = np.ones(length) * 4.05
+    p = _params()
+    dca = _dca(monthly=2000.0)
+    out_spread = simulate_dca(
+        flat,
+        flat,
+        prices,
+        p,
+        _cost(bps=0.0, min_yuan=0.0, spread=0.002),
+        dca,
+        0,
+        length - 1,
+    )
+    out_flat = simulate_dca(
+        flat,
+        flat,
+        prices,
+        p,
+        _cost(bps=0.0, min_yuan=0.0, spread=0.0),
+        dca,
+        0,
+        length - 1,
+    )
+    assert out_spread.num_executions > 0
+    assert out_spread.num_executions == out_flat.num_executions
+    assert out_spread.final_nav < out_flat.final_nav
+
+
+def test_execution_skipped_on_limit_up():
+    length = 31  # 窗口在第 30 天（涨停日）结束：价格尖峰不会波及后续执行
+    flat = np.zeros(length)
+    limit_returns = np.zeros(length)
+    limit_returns[30] = 0.10  # 涨停日（也是窗口最后一天）
+    flat_prices = np.ones(length)
+    limit_prices = np.cumprod(1 + limit_returns)
+    p = _params()
+    dca = _dca(monthly=10000.0)  # 大月供保证第 30 天余额 >= 触发线（非涨停日会执行）
+    out_ctrl = simulate_dca(flat, flat, flat_prices, p, _cost(), dca, 0, length - 1)
+    out_lim = simulate_dca(
+        flat, limit_returns, limit_prices, p, _cost(), dca, 0, length - 1
+    )
+    # 两条路径现金流完全一致，唯一差异是第 30 天涨停 → 恰好少 1 次执行
+    assert out_lim.num_executions == out_ctrl.num_executions - 1
+
+
+def test_execution_settles_t_plus_1_not_same_day():
+    length = 30
+    flat = np.zeros(length)
+    amb_returns = np.zeros(length)
+    amb_returns[1] = 0.05  # 次日尖峰：当日结算（旧行为）会吃到，T+1 结算错过
+    amb_prices = np.cumprod(1 + amb_returns)
+    p = _params(trigger_line=1000)
+    dca = DcaConfig(monthly_contribution=5000.0, contribution_freq_days=1)
+    out = simulate_dca(
+        flat,
+        amb_returns,
+        amb_prices,
+        p,
+        _cost(bps=0.0, min_yuan=0.0, spread=0.0),
+        dca,
+        0,
+        length - 1,
+    )
+    assert out.num_executions >= 1
+    # 零成本 + 平直市场 + T+1：nav 恒为 1.0 → 全零收益序列。
+    # 旧实现第 0 天定投当日可执行（买入后持有过第 1 天尖峰）→ returns[1] ≈ +0.6% ≠ 0
+    assert float(np.max(np.abs(out.returns))) < 1e-12

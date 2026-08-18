@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from 'motion/react';
 import { useState } from 'react';
 
+import { formatCents } from '../lib/money';
 import { modalBackdropVariants, modalPanelVariants } from '../lib/motion';
 
 interface Props {
@@ -65,7 +66,7 @@ export default function SellConfirmModal({ confirmCode, symbol, shares, amount, 
           </div>
           <div className="flex justify-between">
             <span className="text-gray-500">预计金额</span>
-            <span className="font-mono font-medium text-danger-600">¥{amount.toFixed(2)}</span>
+            <span className="font-mono font-medium text-danger-600">{formatCents(amount)}</span>
           </div>
         </div>
 

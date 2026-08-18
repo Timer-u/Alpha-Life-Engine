@@ -4,6 +4,7 @@ import math
 
 import numpy as np
 import torch
+from constants import MC_DEFAULT_ESTIMATE_WINDOW_DAYS
 from models import (
     CVaRResult,
     DrawdownAnalytics,
@@ -27,6 +28,13 @@ def _get_device() -> torch.device:
 
 
 def cholesky_decomposition(matrix: torch.Tensor) -> torch.Tensor:
+    """Return a square-root factor ``L`` with ``L @ L.T == matrix``.
+
+    The fallback for non-PSD input (eigendecomposition with clamped
+    eigenvalues) returns a factor that is NOT guaranteed to be lower
+    triangular — consumers must only use it via matmul (``L @ z`` /
+    ``z @ L.T``), never by reading individual entries.
+    """
     try:
         return torch.linalg.cholesky(matrix)
     except RuntimeError:
@@ -36,9 +44,7 @@ def cholesky_decomposition(matrix: torch.Tensor) -> torch.Tensor:
         except RuntimeError:
             eigvals, eigvecs = torch.linalg.eigh(matrix)
             eigvals = torch.clamp(eigvals, min=1e-8)
-            regularized = eigvecs @ torch.diag(eigvals) @ eigvecs.T
-            regularized = (regularized + regularized.T) / 2
-            return torch.linalg.cholesky(regularized)
+            return eigvecs @ torch.diag(torch.sqrt(eigvals))
 
 
 def covariance_to_correlation(
@@ -179,7 +185,7 @@ def compute_drawdown_analytics(
     dd_squared = dd**2
     ulcer_values = torch.sqrt(dd_squared.mean(dim=1)).tolist()
 
-    max_dd = min(max_dds) if max_dds else 0.0
+    max_dd = float(np.percentile(max_dds, 5)) if max_dds else 0.0
     avg_dd = float(np.mean(max_dds)) if max_dds else 0.0
     max_dd_dur = max(durations) if durations else 0
     avg_rec = int(np.median(recovery_times)) if recovery_times else 0
@@ -239,7 +245,7 @@ def compute_monte_carlo_summary(
     var99 = q(0.01)
 
     dd_list = [compute_max_drawdown(portfolio_values[i]) for i in range(min(n, 1000))]
-    max_dd = min(dd_list) if dd_list else 0.0
+    max_dd = float(np.percentile(dd_list, 5)) if dd_list else 0.0
 
     cvar_95 = compute_cvar(sorted_r, n, 0.05)
     cvar_99 = compute_cvar(sorted_r, n, 0.01)
@@ -286,11 +292,21 @@ def run_monte_carlo(
     initial_prices: list[float],
     days: int = 252,
     num_paths: int = 10000,
+    estimate_window_days: int = MC_DEFAULT_ESTIMATE_WINDOW_DAYS,
 ) -> tuple[MonteCarloResult, CVaRResult, DrawdownAnalytics]:
     device = _get_device()
 
-    mean_returns = compute_mean_returns(data, symbols, device)
-    cov_matrix = compute_covariance_matrix(data, symbols, device)
+    n_total = min(
+        (len(data.symbols[s].close) for s in symbols if s in data.symbols),
+        default=0,
+    )
+    start_idx = max(0, n_total - estimate_window_days)
+    mean_returns = compute_mean_returns(
+        data, symbols, device, start=start_idx, end=n_total - 1
+    )
+    cov_matrix = compute_covariance_matrix(
+        data, symbols, device, start=start_idx, end=n_total - 1
+    )
 
     annualized_returns = mean_returns * 252.0
     annualized_vols = torch.sqrt(torch.clamp(torch.diag(cov_matrix) * 252.0, min=0.0))

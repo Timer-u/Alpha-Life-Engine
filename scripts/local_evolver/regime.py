@@ -18,16 +18,11 @@
 import warnings
 
 import numpy as np
-import torch
 from models import MarketDataInput, RegimeResult
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
-
-
-def _get_device() -> torch.device:
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def compute_equal_weighted_returns(
@@ -251,25 +246,3 @@ def detect_regimes(
         regime_returns=regime_rets,
         regime_volatilities=regime_vols,
     )
-
-
-def blended_covariance(
-    cov_matrix: torch.Tensor,
-    regime_probs: list[float],
-    regime_covs: list[torch.Tensor] | None = None,
-) -> torch.Tensor:
-    """计算 blend 协方差：按状态概率加权平均。
-
-    如果未提供分状态协方差，返回原协方差矩阵。
-    """
-    if regime_covs is None or len(regime_covs) != len(regime_probs):
-        return cov_matrix
-
-    blend = torch.zeros_like(cov_matrix)
-    total_weight = sum(regime_probs)
-    if total_weight <= 0:
-        return cov_matrix
-
-    for prob, cov in zip(regime_probs, regime_covs):
-        blend += (prob / total_weight) * cov
-    return blend

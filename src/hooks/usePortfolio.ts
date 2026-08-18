@@ -59,10 +59,10 @@ async function createTransaction(form: TransactionForm): Promise<Transaction> {
 }
 
 async function calculateCommission(amount: number): Promise<{
-  commission: number;
-  amount: number;
+  amount_cents: number;
+  commission_cents: number;
   commission_rate: number;
-  commission_min: number;
+  commission_min_cents: number;
 }> {
   const res = await fetch(`${API_BASE}/api/transactions/calculate-commission`, {
     method: 'POST',
@@ -75,23 +75,26 @@ async function calculateCommission(amount: number): Promise<{
     throw new Error('计算佣金失败');
   }
   const data = json.data as Record<string, unknown> | undefined;
-  if (!data || typeof data.commission !== 'number') {
+  if (!data || typeof data.commission_cents !== 'number') {
     throw new Error('Invalid commission data');
   }
   return data as {
-    commission: number;
-    amount: number;
+    amount_cents: number;
+    commission_cents: number;
     commission_rate: number;
-    commission_min: number;
+    commission_min_cents: number;
   };
 }
 
-async function depositFunds(amount: number): Promise<DepositResult & { message: string }> {
+async function depositFunds(
+  amountCents: number,
+  idempotencyKey: string
+): Promise<DepositResult & { message: string }> {
   const res = await fetch(`${API_BASE}/api/portfolio/deposit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ amount }),
+    body: JSON.stringify({ amount_cents: amountCents, idempotency_key: idempotencyKey }),
   });
   const json = (await res.json()) as unknown;
   if (!isApiResponse(json) || !json.success) {
@@ -102,7 +105,7 @@ async function depositFunds(amount: number): Promise<DepositResult & { message: 
     throw new Error(msg);
   }
   const data = json.data as Record<string, unknown> | undefined;
-  if (!data || typeof data.amount !== 'number' || typeof data.safe_added !== 'number') {
+  if (!data || typeof data.amount_cents !== 'number' || typeof data.duplicate !== 'boolean') {
     throw new Error('Invalid deposit data');
   }
   const message = 'message' in json && typeof json.message === 'string' ? json.message : '充值成功';
@@ -166,7 +169,8 @@ export function usePortfolio() {
   });
 
   const depositMutation = useMutation({
-    mutationFn: depositFunds,
+    mutationFn: ({ amountCents, idempotencyKey }: { amountCents: number; idempotencyKey: string }) =>
+      depositFunds(amountCents, idempotencyKey),
     onSuccess: invalidatePortfolio,
   });
 

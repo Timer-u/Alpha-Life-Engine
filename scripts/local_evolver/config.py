@@ -52,6 +52,7 @@ def load_config(path: str | None = None) -> EvolverConfig:
         etf_bps=etf_bps,
         etf_min_yuan=etf_min_yuan,
         mmf_bps=mmf_bps,
+        etf_spread=float(tc.get("etf_spread", 0.002)),
     )
 
     dca_cfg = cfg.get("dca", {})
@@ -66,10 +67,15 @@ def load_config(path: str | None = None) -> EvolverConfig:
     config.dca = DcaConfig(
         monthly_contribution=monthly_contribution,
         contribution_freq_days=contribution_freq_days,
+        price_limit=float(dca_cfg.get("price_limit", 0.10)),
+        lot_size=int(dca_cfg.get("lot_size", 100)),
     )
 
     synthetic_cfg = cfg.get("synthetic", {})
     config.gbm_paths = int(synthetic_cfg.get("n_paths_per_scenario", config.gbm_paths))
+    config.mc_estimate_window_days = int(
+        cfg.get("mc", {}).get("estimate_window_days", 252)
+    )
 
     return config
 

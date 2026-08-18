@@ -25,9 +25,9 @@ CREATE TABLE IF NOT EXISTS email_whitelist (
 CREATE TABLE IF NOT EXISTS portfolio (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  total_balance DECIMAL(15,2) DEFAULT 0.00,
-  safe_layer_balance DECIMAL(15,2) DEFAULT 0.00,
-  ambition_layer_balance DECIMAL(15,2) DEFAULT 0.00,
+  total_balance INTEGER NOT NULL DEFAULT 0,
+  safe_layer_balance INTEGER NOT NULL DEFAULT 0,
+  ambition_layer_balance INTEGER NOT NULL DEFAULT 0,
   last_balance_update DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -40,9 +40,9 @@ CREATE TABLE IF NOT EXISTS positions (
   symbol TEXT NOT NULL,
   name TEXT NOT NULL,
   shares DECIMAL(15,6) DEFAULT 0.000000,
-  avg_price DECIMAL(10,2) DEFAULT 0.00,
-  current_price DECIMAL(10,2) DEFAULT 0.00,
-  market_value DECIMAL(15,2) DEFAULT 0.00,
+  avg_price REAL DEFAULT 0,
+  current_price REAL DEFAULT 0,
+  market_value INTEGER NOT NULL DEFAULT 0,
   last_price_update DATETIME DEFAULT CURRENT_TIMESTAMP,
   layer TEXT NOT NULL CHECK (layer IN ('safe', 'ambition')),
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -56,12 +56,14 @@ CREATE TABLE IF NOT EXISTS transactions (
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   symbol TEXT NOT NULL,
   shares DECIMAL(15,6) NOT NULL,
-  price DECIMAL(10,2) NOT NULL,
-  amount DECIMAL(15,2) NOT NULL,
-  commission DECIMAL(10,2) NOT NULL,
+  price REAL NOT NULL,
+  amount INTEGER NOT NULL,
+  commission INTEGER NOT NULL,
   transaction_type TEXT NOT NULL CHECK (transaction_type IN ('buy', 'sell')),
   trigger_signal TEXT,
   layer TEXT NOT NULL CHECK (layer IN ('safe', 'ambition')),
+  realized_pnl INTEGER,
+  trade_date TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   notes TEXT
 );
@@ -84,11 +86,11 @@ CREATE TABLE IF NOT EXISTS market_data (
 CREATE TABLE IF NOT EXISTS trigger_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  balance DECIMAL(15,2) NOT NULL,
+  balance INTEGER NOT NULL,
   trigger_decision TEXT NOT NULL CHECK (trigger_decision IN ('DEFER', 'SKIP', 'EXECUTE')),
-  signal_value DECIMAL(10,2),
-  executed_amount DECIMAL(15,2),
-  commission DECIMAL(10,2),
+  signal_value REAL,
+  executed_amount INTEGER,
+  commission INTEGER,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -111,13 +113,13 @@ CREATE TABLE IF NOT EXISTS reconciliations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   reconciliation_date TEXT NOT NULL,
-  beginning_balance DECIMAL(15,2) NOT NULL,
-  deposits DECIMAL(15,2) NOT NULL DEFAULT 0.00,
-  withdrawals DECIMAL(15,2) NOT NULL DEFAULT 0.00,
-  gains DECIMAL(15,2) NOT NULL DEFAULT 0.00,
-  fees DECIMAL(15,2) NOT NULL DEFAULT 0.00,
-  ending_balance DECIMAL(15,2) NOT NULL,
-  variance DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+  beginning_balance INTEGER NOT NULL,
+  deposits INTEGER NOT NULL DEFAULT 0,
+  withdrawals INTEGER NOT NULL DEFAULT 0,
+  gains INTEGER NOT NULL DEFAULT 0,
+  fees INTEGER NOT NULL DEFAULT 0,
+  ending_balance INTEGER NOT NULL,
+  variance INTEGER NOT NULL DEFAULT 0,
   notes TEXT,
   status TEXT CHECK(status IN ('PENDING', 'CONFIRMED', 'ARCHIVED')),
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -162,6 +164,27 @@ CREATE TABLE IF NOT EXISTS notification_log (
   sent_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 充值台账表（幂等键去重）
+CREATE TABLE IF NOT EXISTS deposits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  amount_cents INTEGER NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, idempotency_key)
+);
+
+-- 审计日志表
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  action TEXT NOT NULL,
+  entity TEXT NOT NULL,
+  old_value TEXT,
+  new_value TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Insert initial configuration values
 INSERT OR IGNORE INTO config (key, value, description) VALUES
 ('trigger_line', '1667', '1667 yuan trigger line'),
@@ -191,3 +214,6 @@ CREATE INDEX IF NOT EXISTS idx_otps_email_created ON otps(email, created_at);
 CREATE INDEX IF NOT EXISTS idx_email_whitelist_email ON email_whitelist(email);
 CREATE INDEX IF NOT EXISTS idx_reconciliations_user_date ON reconciliations(user_id, reconciliation_date);
 CREATE INDEX IF NOT EXISTS idx_notification_log_user_type ON notification_log(user_id, notification_type, sent_at);
+CREATE INDEX IF NOT EXISTS idx_transactions_user_trade_date ON transactions(user_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);

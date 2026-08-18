@@ -11,6 +11,7 @@ import TransactionForm from '../components/TransactionForm';
 import TriggerProgress from '../components/TriggerProgress';
 import { useAuth } from '../hooks/useAuth';
 import { usePortfolio } from '../hooks/usePortfolio';
+import { formatCents } from '../lib/money';
 import { fadeScaleVariants, staggerContainerVariants, staggerItemVariants } from '../lib/motion';
 
 function DashboardSkeleton() {
@@ -205,18 +206,18 @@ export default function Dashboard() {
               <motion.div className="grid grid-cols-1 md:grid-cols-3 gap-6" variants={sectionVariants}>
                 <motion.div className="card" variants={itemVariants} whileHover={cardHover}>
                   <p className="text-sm text-gray-500 mb-1">总资产</p>
-                  <p className="text-2xl font-bold text-gray-900">¥{(totalCash + safeHoldings + ambitionHoldings).toFixed(2)}</p>
-                  <p className="text-xs text-gray-400 mt-1 font-mono">现金 ¥{totalCash.toFixed(2)} · 持仓 ¥{(safeHoldings + ambitionHoldings).toFixed(2)}</p>
+                  <p className="text-2xl font-bold text-gray-900">{formatCents(totalCash + safeHoldings + ambitionHoldings)}</p>
+                  <p className="text-xs text-gray-400 mt-1 font-mono">现金 {formatCents(totalCash)} · 持仓 {formatCents(safeHoldings + ambitionHoldings)}</p>
                 </motion.div>
                 <motion.div className="card" variants={itemVariants} whileHover={cardHover}>
                   <p className="text-sm text-gray-500 mb-1">安全层</p>
-                  <p className="text-2xl font-bold text-success-600">¥{(safeCash + safeHoldings).toFixed(2)}</p>
-                  <p className="text-xs text-gray-400 mt-1 font-mono">现金 ¥{safeCash.toFixed(2)} · 持仓 ¥{safeHoldings.toFixed(2)}</p>
+                  <p className="text-2xl font-bold text-success-600">{formatCents(safeCash + safeHoldings)}</p>
+                  <p className="text-xs text-gray-400 mt-1 font-mono">现金 {formatCents(safeCash)} · 持仓 {formatCents(safeHoldings)}</p>
                 </motion.div>
                 <motion.div className="card" variants={itemVariants} whileHover={cardHover}>
                   <p className="text-sm text-gray-500 mb-1">进取层</p>
-                  <p className="text-2xl font-bold text-primary-600">¥{(ambitionCash + ambitionHoldings).toFixed(2)}</p>
-                  <p className="text-xs text-gray-400 mt-1 font-mono">现金 ¥{ambitionCash.toFixed(2)} · 持仓 ¥{ambitionHoldings.toFixed(2)}</p>
+                  <p className="text-2xl font-bold text-primary-600">{formatCents(ambitionCash + ambitionHoldings)}</p>
+                  <p className="text-xs text-gray-400 mt-1 font-mono">现金 {formatCents(ambitionCash)} · 持仓 {formatCents(ambitionHoldings)}</p>
                 </motion.div>
               </motion.div>
               <motion.div variants={itemVariants}>

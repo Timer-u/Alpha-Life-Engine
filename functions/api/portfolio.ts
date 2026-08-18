@@ -3,6 +3,7 @@ import type { Env, Variables } from './[[route]]';
 import { Hono } from 'hono';
 import { z } from 'zod';
 
+import { centsToYuan, splitDepositCents, yuanToCents } from '../../src/lib/money';
 import { isEvolvedParams, TRIGGER_CONSTANTS } from '../../src/types/api';
 
 import { sessionMiddleware } from './auth';
@@ -13,17 +14,6 @@ const portfolioRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-/** 按 safeRatio 拆分充值金额到安全/进取两层，进取层取余保证两层之和恒等于金额 */
-export function splitDeposit(amount: number, safeRatio: number): { safeAdded: number; ambitionAdded: number } {
-  const safeAdded = round2(amount * safeRatio);
-  const ambitionAdded = round2(amount - safeAdded);
-  return { safeAdded, ambitionAdded };
 }
 
 /**
@@ -71,7 +61,7 @@ async function enrichPositionsWithMarketPrices(
       return {
         ...pos,
         current_price: latestPrice,
-        market_value: pos.shares * latestPrice,
+        market_value: Math.round(pos.shares * latestPrice * 100),
         last_price_update: now,
       };
     }
@@ -181,9 +171,10 @@ portfolioRouter.get('/', async (c) => {
     const balance = portfolio?.total_balance ?? 0;
 
     // 触发线跟随演化参数（与 trigger-engine 决策路径一致），无有效演化参数时回退默认 1667
+    // 演化参数为元，转为分；回退值 TRIGGER_CONSTANTS.LINE 本身即分
     const { allocation } = await resolveActiveParams(db, userId);
-    const triggerLine = allocation && isEvolvedParams(allocation)
-      ? (allocation.trigger_line ?? TRIGGER_CONSTANTS.LINE)
+    const triggerLineCents = allocation && isEvolvedParams(allocation)
+      ? yuanToCents(allocation.trigger_line ?? TRIGGER_CONSTANTS.TRIGGER_LINE_DEFAULT_YUAN)
       : TRIGGER_CONSTANTS.LINE;
 
     return c.json({
@@ -194,8 +185,8 @@ portfolioRouter.get('/', async (c) => {
         recent_transactions: recentTransactions,
         trigger_status: {
           current_balance: balance,
-          trigger_line: triggerLine,
-          status: balance < triggerLine ? 'accumulating' : 'triggerable',
+          trigger_line: triggerLineCents,
+          status: balance < triggerLineCents ? 'accumulating' : 'triggerable',
           last_decision: lastTrigger?.trigger_decision,
           last_decision_time: lastTrigger?.created_at,
         },
@@ -228,61 +219,73 @@ portfolioRouter.get('/layer-performance', async (c) => {
 });
 
 const depositSchema = z.object({
-  amount: z.number().positive().max(100_000_000),
+  amount_cents: z.number().int().positive().max(10_000_000_000),
+  idempotency_key: z.string().min(8).max(64),
 });
 
 // POST /api/portfolio/deposit
 // 资金池充值 + LCH 自动切分：按当前生效分配比例（演化参数或 LCH 兜底）拆入双层
+// 原子幂等：batch 内 UPDATE 以 deposits 账本为守卫，重复 idempotency_key 不重复入账
 portfolioRouter.post('/deposit', async (c) => {
   try {
     const userId = c.get('userId');
     const db = c.env.DB;
     const parsed = depositSchema.safeParse(await c.req.json());
     if (!parsed.success) {
-      return c.json({ success: false, error: '验证失败', message: '充值金额必须是正数' }, 400);
+      return c.json({ success: false, error: '验证失败', message: '充值金额必须为正整数（分）且需提供幂等键' }, 400);
     }
-    const amount = round2(parsed.data.amount);
+    const amount_cents = parsed.data.amount_cents;
+    const idempotency_key = parsed.data.idempotency_key;
     const now = nowIso();
-
-    const portfolio = await db.prepare(
-      'SELECT total_balance, safe_layer_balance, ambition_layer_balance FROM portfolio WHERE user_id = ?'
-    ).bind(userId).first<{
-      total_balance: number;
-      safe_layer_balance: number;
-      ambition_layer_balance: number;
-    }>();
-    if (!portfolio) {
-      return c.json({ success: false, error: 'Not Found', message: '未找到投资组合，请重新登录后重试' }, 400);
-    }
 
     const { allocation } = await resolveActiveParams(db, userId);
     const safeRatio = allocation?.safe_ratio ?? 0.6;
-    const { safeAdded, ambitionAdded } = splitDeposit(amount, safeRatio);
+    const { safeAddedCents, ambitionAddedCents } = splitDepositCents(amount_cents, safeRatio);
 
-    const newTotal = round2(portfolio.total_balance + amount);
-    const newSafe = round2(portfolio.safe_layer_balance + safeAdded);
-    const newAmbition = round2(portfolio.ambition_layer_balance + ambitionAdded);
+    const results = await db.batch([
+      db.prepare(
+        `UPDATE portfolio
+         SET total_balance = total_balance + ?, safe_layer_balance = safe_layer_balance + ?,
+             ambition_layer_balance = ambition_layer_balance + ?, last_balance_update = ?, updated_at = ?
+         WHERE user_id = ?
+           AND (SELECT COUNT(*) FROM deposits WHERE user_id = ? AND idempotency_key = ?) = 0
+         RETURNING total_balance, safe_layer_balance, ambition_layer_balance`
+      ).bind(amount_cents, safeAddedCents, ambitionAddedCents, now, now, userId, userId, idempotency_key),
+      db.prepare(
+        `INSERT INTO deposits (user_id, amount_cents, idempotency_key, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, idempotency_key) DO NOTHING RETURNING *`
+      ).bind(userId, amount_cents, idempotency_key, now),
+    ]);
 
-    await db.prepare(
-      'UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ? WHERE user_id = ?'
-    ).bind(newTotal, newSafe, newAmbition, now, now, userId).run();
+    const updated = results[0]?.results[0] as { total_balance: number; safe_layer_balance: number; ambition_layer_balance: number } | undefined;
+    if (!updated) {
+      const existing = await db.prepare('SELECT amount_cents FROM deposits WHERE user_id = ? AND idempotency_key = ?')
+        .bind(userId, idempotency_key).first<{ amount_cents: number }>();
+      return c.json({
+        success: true,
+        data: { duplicate: true, amount_cents, safe_added_cents: 0, ambition_added_cents: 0, safe_ratio: safeRatio, ambition_ratio: 1 - safeRatio, allocation_source: allocation?.source ?? 'lch', portfolio: {} },
+        message: `该笔充值已入账（重复请求已忽略）${existing ? `：¥${centsToYuan(existing.amount_cents).toFixed(2)}` : ''}`,
+        timestamp: now,
+      });
+    }
 
     return c.json({
       success: true,
       data: {
-        amount,
-        safe_added: safeAdded,
-        ambition_added: ambitionAdded,
+        duplicate: false,
+        amount_cents,
+        safe_added_cents: safeAddedCents,
+        ambition_added_cents: ambitionAddedCents,
         safe_ratio: safeRatio,
-        ambition_ratio: round2(1 - safeRatio),
+        ambition_ratio: 1 - safeRatio,
         allocation_source: allocation?.source ?? 'lch',
         portfolio: {
-          total_balance: newTotal,
-          safe_layer_balance: newSafe,
-          ambition_layer_balance: newAmbition,
+          total_balance: updated.total_balance,
+          safe_layer_balance: updated.safe_layer_balance,
+          ambition_layer_balance: updated.ambition_layer_balance,
         },
       },
-      message: `已充值 ¥${amount.toFixed(2)}：安全层 +¥${safeAdded.toFixed(2)} / 进取层 +¥${ambitionAdded.toFixed(2)}`,
+      message: `已充值 ¥${centsToYuan(amount_cents).toFixed(2)}：安全层 +¥${centsToYuan(safeAddedCents).toFixed(2)} / 进取层 +¥${centsToYuan(ambitionAddedCents).toFixed(2)}`,
       timestamp: now,
     });
   } catch (error) {
@@ -291,41 +294,4 @@ portfolioRouter.post('/deposit', async (c) => {
   }
 });
 
-// PUT /api/portfolio
-portfolioRouter.put('/', async (c) => {
-  try {
-    const userId = c.get('userId');
-    const body = await c.req.json();
-    const db = c.env.DB;
-
-    const allowedFields = ['total_balance', 'safe_layer_balance', 'ambition_layer_balance'] as const;
-    type AllowedField = typeof allowedFields[number];
-    const updates: Partial<Record<AllowedField, number>> = {};
-
-    for (const field of allowedFields) {
-      const bodyRecord = body as Record<string, unknown>;
-      const value = bodyRecord[field];
-      if (value !== undefined && typeof value === 'number') {
-        updates[field] = value;
-      }
-    }
-
-    if (Object.keys(updates).length === 0) {
-      return c.json({ success: false, error: 'Invalid input', message: '没有有效的更新字段' }, 400);
-    }
-
-    const setClause = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-    const values = Object.values(updates);
-    await db.prepare(
-      `UPDATE portfolio SET ${setClause}, updated_at = ? WHERE user_id = ?`
-    ).bind(...values, nowIso(), userId).run();
-
-    return c.json({ success: true, data: { message: '投资组合已更新' }, timestamp: nowIso() });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return c.json({ success: false, error: 'Failed', message }, 500);
-  }
-});
-
 export { portfolioRouter };
-
