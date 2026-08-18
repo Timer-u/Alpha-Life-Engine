@@ -63,14 +63,15 @@ export async function exportTradeCalendar(): Promise<string> {
   const parsed = parseCalendarOutput(lastLine);
 
   const dates = [...new Set(parsed.dates)].sort();
+  const lastDate = dates[dates.length - 1];
   const schema = {
     source: 'akshare tool_trade_date_hist_sina',
     generated_at: new Date().toISOString().slice(0, 10),
-    through: CALENDAR_THROUGH,
+    through: lastDate,
     dates,
   };
   writeFileSync(OUT_FILE, `${JSON.stringify(schema, null, 2)}\n`, 'utf8');
-  console.log(`Wrote ${dates.length} trading days (${CALENDAR_START}..${CALENDAR_THROUGH}) to ${OUT_FILE}`);
+  console.log(`Wrote ${dates.length} trading days (${CALENDAR_START}..${lastDate}) to ${OUT_FILE}`);
   return OUT_FILE;
 }
 

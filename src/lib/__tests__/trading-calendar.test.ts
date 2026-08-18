@@ -24,6 +24,7 @@ describe('isTradingDay', () => {
   });
 
   it('falls back to weekday approximation beyond the calendar', () => {
+    expect(isTradingDay('2027-01-04')).toBe(true); // Monday, past `through` (2026-12-31)
     expect(isTradingDay('2028-01-04')).toBe(true); // beyond `through`, Tuesday
     expect(isTradingDay('2028-01-01')).toBe(false); // Saturday
   });
