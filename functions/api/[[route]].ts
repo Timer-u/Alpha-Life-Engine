@@ -5,6 +5,7 @@ import { cors } from 'hono/cors'
 
 import { authRouter } from './auth'
 import { marketDataRouter } from './market-data'
+import { runScheduledMarketUpdate } from './market-update'
 import { runScheduledNotifications } from './notifications'
 import { portfolioRouter } from './portfolio'
 import { reconciliationRouter } from './reconciliation'
@@ -95,6 +96,21 @@ app.onError((err, c) => {
 export default {
   fetch: app.fetch,
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(runScheduledNotifications(env))
+    ctx.waitUntil(
+      Promise.allSettled([
+        runScheduledNotifications(env),
+        runScheduledMarketUpdate(env).then(result => {
+          if (result.skipped) {
+            console.warn(`[scheduled] market update skipped: ${result.reason ?? ''}`)
+          } else {
+            console.warn(`[scheduled] market update ok: ${result.updatedSymbols.length} symbols, ${result.insertedRows} rows`)
+          }
+        }),
+      ]).then(results => {
+        for (const r of results) {
+          if (r.status === 'rejected') console.error('[scheduled] task failed:', r.reason)
+        }
+      })
+    )
   },
 }

@@ -15,3 +15,8 @@ export const SYMBOL_NAMES: Record<string, string> = {
 export function symbolName(symbol: string): string {
   return SYMBOL_NAMES[symbol] ?? symbol;
 }
+
+// 新浪行情接口的标的代码（沪深 ETF 均为 sh 前缀；sz 留给未来使用）
+export function sinaCode(symbol: string): string {
+  return `sh${symbol}`;
+}
