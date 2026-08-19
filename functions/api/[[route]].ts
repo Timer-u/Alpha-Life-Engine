@@ -4,6 +4,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 
 import { authRouter } from './auth'
+import { dividendsRouter } from './dividends'
 import { marketDataRouter } from './market-data'
 import { runScheduledMarketUpdate } from './market-update'
 import { runScheduledNotifications } from './notifications'
@@ -61,6 +62,7 @@ app.get('/health', healthHandler)
 app.get('/api/health', healthHandler)
 
 app.route('/api/auth', authRouter)
+app.route('/api/dividends', dividendsRouter)
 app.route('/api/portfolio', portfolioRouter)
 app.route('/api/transactions', transactionRouter)
 app.route('/api/trigger', triggerRouter)

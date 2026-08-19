@@ -174,6 +174,20 @@ CREATE TABLE IF NOT EXISTS deposits (
   UNIQUE(user_id, idempotency_key)
 );
 
+-- 分红/除权事件表（现金分红、拆股/送股；幂等键去重）
+CREATE TABLE IF NOT EXISTS dividend_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  symbol TEXT NOT NULL,
+  ex_date TEXT NOT NULL,
+  type TEXT NOT NULL CHECK(type IN ('cash', 'split')),
+  amount_per_share DECIMAL(10,4),
+  split_ratio DECIMAL(10,6),
+  notes TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, symbol, ex_date, type)
+);
+
 -- 审计日志表
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,4 +230,5 @@ CREATE INDEX IF NOT EXISTS idx_reconciliations_user_date ON reconciliations(user
 CREATE INDEX IF NOT EXISTS idx_notification_log_user_type ON notification_log(user_id, notification_type, sent_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_user_trade_date ON transactions(user_id, trade_date);
 CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_id);
+CREATE INDEX IF NOT EXISTS idx_dividend_events_user_id ON dividend_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
