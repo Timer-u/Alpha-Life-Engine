@@ -114,7 +114,7 @@ npm run database:migrate   # 本地 D1 建表
 ### 3. 首次市场数据初始化
 
 ```bash
-npm run market:init   # 下载全量历史 + 导入 D1
+npm run market:init   # 下载全量历史 + 建表 + 导入 D1
 ```
 
 AKShare 新浪源是免费接口，无需 API Key。首次下载约需 5-15 分钟。
@@ -202,8 +202,8 @@ RESEND_API_KEY=re_xxxxx
 ## 市场数据管理
 
 ```bash
-npm run market:init             # 本地全量初始化（下载 + 建表）
-npm run market:init:prod         # 生产环境全量初始化
+npm run market:init             # 本地全量初始化（下载 + 建表 + 导入）
+npm run market:init:prod        # 生产环境全量初始化（下载 + 建表 + 导入）
 npm run market:update            # 本地增量更新
 npm run market:update:prod       # 生产环境增量更新
 ```

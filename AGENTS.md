@@ -22,7 +22,7 @@ Personal quantitative DCA system with dual-layer accounts (safe + ambition), 166
 
 | Command | What |
 |---|---|
-| `npm run market:init` | Full history download + schema migrate |
+| `npm run market:init` | Full history download + schema migrate + import D1 |
 | `npm run market:update` | Incremental update (AKShare Sina source, local D1) |
 | `npm run market:update:prod` | Incremental update, prod D1 (`--prod` flag) |
 | `npm run market:init:prod` | Full init for production |
