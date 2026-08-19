@@ -98,11 +98,24 @@ reconciliationRouter.use('*', sessionMiddleware);
 reconciliationRouter.get('/', async (c) => {
   try {
     const userId = c.get('userId');
-    const result = await c.env.DB.prepare(
-      'SELECT * FROM reconciliations WHERE user_id = ? ORDER BY reconciliation_date DESC LIMIT 24'
-    ).bind(userId).all<ReconciliationRow>();
+    const rawLimit = parseInt(c.req.query('limit') ?? '24', 10);
+    const rawOffset = parseInt(c.req.query('offset') ?? '0', 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 24;
+    const offset = Number.isFinite(rawOffset) ? Math.max(rawOffset, 0) : 0;
 
-    return c.json({ success: true, data: result.results, timestamp: nowIso() });
+    const [totalResult, result] = await Promise.all([
+      c.env.DB.prepare('SELECT COUNT(*) AS total FROM reconciliations WHERE user_id = ?').bind(userId).first<{ total: number }>(),
+      c.env.DB.prepare(
+        'SELECT * FROM reconciliations WHERE user_id = ? ORDER BY reconciliation_date DESC LIMIT ? OFFSET ?'
+      ).bind(userId, limit, offset).all<ReconciliationRow>(),
+    ]);
+
+    return c.json({
+      success: true,
+      data: result.results,
+      pagination: { total: totalResult?.total ?? 0, limit, offset },
+      timestamp: nowIso(),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return c.json({ success: false, error: 'Failed', message }, 500);

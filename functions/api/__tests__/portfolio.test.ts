@@ -41,6 +41,77 @@ function strategyReportRule(rows: unknown[]) {
   return { match: (sql: string) => sql.includes('FROM strategy_reports'), rows };
 }
 
+function recentTransactionRow(id: number) {
+  return {
+    id,
+    user_id: 7,
+    symbol: '511360',
+    shares: 100,
+    price: 10,
+    amount: 100000,
+    commission: 500,
+    transaction_type: 'buy',
+    trigger_signal: null,
+    layer: 'safe',
+    created_at: '2026-01-01T00:00:00.000Z',
+    notes: null,
+  };
+}
+
+describe('GET /api/portfolio recent_transactions pagination', () => {
+  function recentTransactionsRule(rows: unknown[]) {
+  return {
+    match: (sql: string) => sql.includes('FROM transactions'),
+    rows: (_sql: string, args: unknown[]) => {
+      const offset = typeof args[2] === 'number' ? args[2] : 0;
+      const limit = typeof args[1] === 'number' ? args[1] : rows.length;
+      return rows.slice(offset, offset + limit);
+    },
+  };
+}
+
+  async function getRecentTransactions(db: FakeD1, path: string): Promise<unknown[]> {
+    const res = await portfolioRouter.request(path, { method: 'GET', headers: SESSION_COOKIE }, testEnv(db), executionCtx);
+    const json = (await res.json()) as { data: { recent_transactions: unknown[] } };
+    return json.data.recent_transactions;
+  }
+
+  it('honors recent_limit', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      preferencesRule(),
+      portfolioRule(170000),
+      recentTransactionsRule([recentTransactionRow(1), recentTransactionRow(2), recentTransactionRow(3)]),
+    ]);
+    const recent = await getRecentTransactions(db, '/?recent_limit=3');
+    expect(recent.length).toBe(3);
+  });
+
+  it('defaults recent transactions to 10', async () => {
+    const rows = Array.from({ length: 12 }, (_, i) => recentTransactionRow(i + 1));
+    const db = new FakeD1([
+      sessionRule(),
+      preferencesRule(),
+      portfolioRule(170000),
+      recentTransactionsRule(rows),
+    ]);
+    const recent = await getRecentTransactions(db, '/');
+    expect(recent.length).toBe(10);
+  });
+
+  it('honors recent_offset', async () => {
+    const rows = Array.from({ length: 5 }, (_, i) => recentTransactionRow(i + 1));
+    const db = new FakeD1([
+      sessionRule(),
+      preferencesRule(),
+      portfolioRule(170000),
+      recentTransactionsRule(rows),
+    ]);
+    const recent = await getRecentTransactions(db, '/?recent_limit=3&recent_offset=2');
+    expect(recent.length).toBe(3);
+  });
+});
+
 const executionCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
 
 function testEnv(db: FakeD1): Env {

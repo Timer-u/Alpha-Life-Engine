@@ -107,9 +107,14 @@ portfolioRouter.get('/', async (c) => {
 
     const positions = await enrichPositionsWithMarketPrices(db, rawPositions);
 
+    const recentLimitRaw = parseInt(c.req.query('recent_limit') ?? '10', 10);
+    const recentOffsetRaw = parseInt(c.req.query('recent_offset') ?? '0', 10);
+    const recentLimit = Number.isFinite(recentLimitRaw) ? Math.min(Math.max(recentLimitRaw, 1), 50) : 10;
+    const recentOffset = Number.isFinite(recentOffsetRaw) ? Math.max(recentOffsetRaw, 0) : 0;
+
     const txResult = await db.prepare(
-      'SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 10'
-    ).bind(userId).all<{
+      'SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
+    ).bind(userId, recentLimit, recentOffset).all<{
       id: number;
       user_id: number;
       symbol: string;

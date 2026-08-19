@@ -65,12 +65,24 @@ interface TransactionRow {
 transactionRouter.get('/', async (c) => {
   try {
     const userId = c.get('userId');
-    const limit = parseInt(c.req.query('limit') ?? '100', 10);
-    const result = await c.env.DB.prepare(
-      'SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?'
-    ).bind(userId, limit).all<TransactionRow>();
+    const rawLimit = parseInt(c.req.query('limit') ?? '100', 10);
+    const rawOffset = parseInt(c.req.query('offset') ?? '0', 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 100;
+    const offset = Number.isFinite(rawOffset) ? Math.max(rawOffset, 0) : 0;
 
-    return c.json({ success: true, data: result.results, timestamp: nowIso() });
+    const [totalResult, result] = await Promise.all([
+      c.env.DB.prepare('SELECT COUNT(*) AS total FROM transactions WHERE user_id = ?').bind(userId).first<{ total: number }>(),
+      c.env.DB.prepare(
+        'SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
+      ).bind(userId, limit, offset).all<TransactionRow>(),
+    ]);
+
+    return c.json({
+      success: true,
+      data: result.results,
+      pagination: { total: totalResult?.total ?? 0, limit, offset },
+      timestamp: nowIso(),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return c.json({ success: false, error: 'Failed', message }, 500);

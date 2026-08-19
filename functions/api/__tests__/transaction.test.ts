@@ -50,6 +50,62 @@ describe('POST /api/transactions', () => {
     expect(res.status).toBe(201);
   });
 
+  it('returns total, limit and offset for the paginated list', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('SELECT COUNT(*) AS total FROM transactions'), rows: [{ total: 37 }] },
+      {
+        match: sql => sql.includes('FROM transactions'),
+        rows: Array.from({ length: 5 }, (_, i) => ({ id: i + 1, user_id: 7, symbol: '511360', shares: 100, price: 10, amount: 100000, commission: 500, transaction_type: 'buy', trigger_signal: null, layer: 'safe', realized_pnl: null, trade_date: '2026-01-01', created_at: '2026-01-01T00:00:00.000Z', notes: null })),
+      },
+    ]);
+    const res = await transactionRouter.request('/?limit=5&offset=10', {
+      method: 'GET',
+      headers: SESSION_COOKIE,
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      success: boolean;
+      data: unknown[];
+      pagination: { total: number; limit: number; offset: number };
+    };
+    expect(json.success).toBe(true);
+    expect(json.data.length).toBe(5);
+    expect(json.pagination).toEqual({ total: 37, limit: 5, offset: 10 });
+  });
+
+  it('clamps invalid limit and offset to the allowed range', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('SELECT COUNT(*) AS total FROM transactions'), rows: [{ total: 37 }] },
+      { match: sql => sql.includes('FROM transactions'), rows: [] },
+    ]);
+    const res = await transactionRouter.request('/?limit=9999&offset=-3', {
+      method: 'GET',
+      headers: SESSION_COOKIE,
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { pagination: { limit: number; offset: number } };
+    expect(json.pagination.limit).toBe(200);
+    expect(json.pagination.offset).toBe(0);
+  });
+
+  it('defaults to limit 100 and offset 0', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('SELECT COUNT(*) AS total FROM transactions'), rows: [{ total: 37 }] },
+      { match: sql => sql.includes('FROM transactions'), rows: [] },
+    ]);
+    const res = await transactionRouter.request('/', {
+      method: 'GET',
+      headers: SESSION_COOKIE,
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { pagination: { limit: number; offset: number } };
+    expect(json.pagination.limit).toBe(100);
+    expect(json.pagination.offset).toBe(0);
+  });
+
   it('rejects the buy with NO compensation writes when the guard subquery returns 0 rows', async () => {
     const compensated = false;
     const db = new FakeD1([

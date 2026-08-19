@@ -35,6 +35,68 @@ describe('variancePct', () => {
   });
 });
 
+describe('GET /api/reconciliation pagination', () => {
+  it('returns total, limit and offset for the paginated list', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('SELECT COUNT(*) AS total FROM reconciliations'), rows: [{ total: 42 }] },
+      {
+        match: sql => sql.includes('FROM reconciliations'),
+        rows: Array.from({ length: 3 }, (_, i) => ({
+          id: i + 1, user_id: 7, reconciliation_date: '2026-01', beginning_balance: 100000,
+          deposits: 0, withdrawals: 0, gains: 0, fees: 0, ending_balance: 100000, variance: 0,
+          notes: null, status: 'CONFIRMED', created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+        })),
+      },
+    ]);
+    const res = await reconciliationRouter.request('/?limit=3&offset=6', {
+      method: 'GET',
+      headers: SESSION_COOKIE,
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      success: boolean;
+      data: unknown[];
+      pagination: { total: number; limit: number; offset: number };
+    };
+    expect(json.success).toBe(true);
+    expect(json.data.length).toBe(3);
+    expect(json.pagination).toEqual({ total: 42, limit: 3, offset: 6 });
+  });
+
+  it('clamps invalid limit and offset to the allowed range', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('SELECT COUNT(*) AS total FROM reconciliations'), rows: [{ total: 42 }] },
+      { match: sql => sql.includes('FROM reconciliations'), rows: [] },
+    ]);
+    const res = await reconciliationRouter.request('/?limit=9999&offset=-3', {
+      method: 'GET',
+      headers: SESSION_COOKIE,
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { pagination: { limit: number; offset: number } };
+    expect(json.pagination.limit).toBe(200);
+    expect(json.pagination.offset).toBe(0);
+  });
+
+  it('defaults to limit 24 and offset 0', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('SELECT COUNT(*) AS total FROM reconciliations'), rows: [{ total: 42 }] },
+      { match: sql => sql.includes('FROM reconciliations'), rows: [] },
+    ]);
+    const res = await reconciliationRouter.request('/', {
+      method: 'GET',
+      headers: SESSION_COOKIE,
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { pagination: { limit: number; offset: number } };
+    expect(json.pagination.limit).toBe(24);
+    expect(json.pagination.offset).toBe(0);
+  });
+});
+
 describe('POST /api/reconciliation/:id/calibrate', () => {
   it('clamps an inconsistent layer ratio so ambition cash never goes negative', async () => {
     // 现金层占比异常（safe 6000 / total 3000 = 2.0）：钳位后安全层拿全部现金，进取层为 0 而非负数
