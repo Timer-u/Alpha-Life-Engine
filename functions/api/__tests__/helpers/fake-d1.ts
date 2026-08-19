@@ -64,13 +64,17 @@ export class FakeD1 {
   }
 
   statements: string[] = [];
+  statementArgs: unknown[][] = [];
+  statementChanges: number[] = [];
 
   async batch(stmts: FakeStatement[]): Promise<D1Result[]> {
     const out: D1Result[] = [];
     for (const stmt of stmts) {
       this.statements.push(stmt.sql);
+      this.statementArgs.push(stmt.args);
       const all = await stmt.all();
       const changes = this.resolveRule(stmt.sql, stmt.args)?.changes ?? 1;
+      this.statementChanges.push(changes);
       out.push({ ...all, meta: fullMeta(changes) });
     }
     return out;

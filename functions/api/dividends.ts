@@ -50,14 +50,10 @@ dividendsRouter.post('/', async (c) => {
     ).bind(userId, data.symbol).all<PositionRow>();
     const positions = positionsResult.results;
 
-    const statements: D1PreparedStatement[] = [
-      db.prepare(
-        `INSERT INTO dividend_events (user_id, symbol, ex_date, type, amount_per_share, split_ratio, notes, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(user_id, symbol, ex_date, type) DO NOTHING RETURNING *`
-      ).bind(userId, data.symbol, data.ex_date, data.type,
-        data.amount_per_share ?? null, data.split_ratio ?? null, data.notes ?? null, now),
-    ];
+    const duplicateGuard = `(SELECT COUNT(*) FROM dividend_events WHERE user_id = ? AND symbol = ? AND ex_date = ? AND type = ?) = 0`;
+    const guardArgs: unknown[] = [userId, data.symbol, data.ex_date, data.type];
+
+    const statements: D1PreparedStatement[] = [];
 
     if (data.type === 'cash' && positions.length > 0) {
       const layerBalances: Record<'safe' | 'ambition', number> = { safe: 0, ambition: 0 };
@@ -70,25 +66,34 @@ dividendsRouter.post('/', async (c) => {
         if (delta <= 0) continue;
         statements.push(db.prepare(
           `UPDATE portfolio SET ${layer}_layer_balance = ${layer}_layer_balance + ?, last_balance_update = ?, updated_at = ?
-           WHERE user_id = ?`
-        ).bind(delta, now, now, userId));
+           WHERE user_id = ? AND ${duplicateGuard}`
+        ).bind(delta, now, now, userId, ...guardArgs));
       }
     } else if (data.type === 'split' && positions.length > 0) {
       statements.push(db.prepare(
-        'UPDATE positions SET shares = ROUND(shares * ?, 6), avg_price = avg_price / ? WHERE user_id = ? AND symbol = ?'
-      ).bind(data.split_ratio!, data.split_ratio!, userId, data.symbol));
+        `UPDATE positions SET shares = ROUND(shares * ?, 6), avg_price = avg_price / ?
+         WHERE user_id = ? AND symbol = ? AND ${duplicateGuard}`
+      ).bind(data.split_ratio!, data.split_ratio!, userId, data.symbol, ...guardArgs));
     }
 
     statements.push(db.prepare(
       `INSERT INTO audit_logs (user_id, action, entity, old_value, new_value, created_at)
-       VALUES (?, 'dividend', 'dividend_events', NULL, ?, ?)`
+       SELECT ?, 'dividend', 'dividend_events', NULL, ?, ?
+       WHERE ${duplicateGuard}`
     ).bind(userId, JSON.stringify({
       symbol: data.symbol, ex_date: data.ex_date, type: data.type,
       amount_per_share: data.amount_per_share ?? null, split_ratio: data.split_ratio ?? null,
-    }), now));
+    }), now, ...guardArgs));
+
+    statements.push(db.prepare(
+      `INSERT INTO dividend_events (user_id, symbol, ex_date, type, amount_per_share, split_ratio, notes, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, symbol, ex_date, type) DO NOTHING RETURNING *`
+    ).bind(userId, data.symbol, data.ex_date, data.type,
+      data.amount_per_share ?? null, data.split_ratio ?? null, data.notes ?? null, now));
 
     const results = await db.batch(statements);
-    const inserted = results[0]?.results[0];
+    const inserted = results[statements.length - 1]?.results[0];
     if (!inserted) {
       const existing = await db.prepare(
         'SELECT id, ex_date FROM dividend_events WHERE user_id = ? AND symbol = ? AND ex_date = ? AND type = ?'
