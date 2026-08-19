@@ -41,7 +41,7 @@ async function createTransaction(form: TransactionForm): Promise<Transaction> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify(form),
+    body: JSON.stringify({ ...form, idempotency_key: crypto.randomUUID() }),
   });
   const json = (await res.json()) as unknown;
   if (!isApiResponse(json) || !json.success) {

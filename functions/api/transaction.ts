@@ -28,6 +28,7 @@ const transactionSchema = z.object({
   layer: z.enum(['safe', 'ambition']),
   trigger_signal: z.string().optional(),
   notes: z.string().optional(),
+  idempotency_key: z.string().min(8).max(64),
 });
 
 interface PortfolioRow {
@@ -126,6 +127,19 @@ transactionRouter.post('/', async (c) => {
       'SELECT id, shares, avg_price FROM positions WHERE user_id = ? AND symbol = ? AND layer = ?'
     ).bind(userId, data.symbol, data.layer).first<PositionRow>();
 
+    const existing = await db.prepare(
+      'SELECT * FROM transactions WHERE user_id = ? AND idempotency_key = ?'
+    ).bind(userId, data.idempotency_key).first<TransactionRow>();
+    if (existing) {
+      return c.json({
+        success: true,
+        data: existing,
+        duplicate: true,
+        message: '该笔交易已记录（重复请求已忽略）',
+        timestamp: now,
+      });
+    }
+
     const layerBalance = data.layer === 'safe' ? portfolio.safe_layer_balance : portfolio.ambition_layer_balance;
     const layerCol = data.layer === 'safe' ? 'safe_layer_balance' : 'ambition_layer_balance';
     const statements: D1PreparedStatement[] = [];
@@ -150,13 +164,14 @@ transactionRouter.post('/', async (c) => {
 
       statements.push(
         db.prepare(
-          `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?
+          `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?
            WHERE (SELECT ${layerCol} FROM portfolio WHERE user_id = ?) >= ?
+             AND (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0
            RETURNING *`
         ).bind(userId, data.symbol, data.shares, data.price, amountCents, commissionCents,
           data.transaction_type, data.trigger_signal ?? null, data.layer, tradeDate, now, data.notes ?? null,
-          userId, totalCostCents)
+          data.idempotency_key, userId, totalCostCents, userId, data.idempotency_key)
       );
 
       if (position) {
@@ -211,13 +226,14 @@ transactionRouter.post('/', async (c) => {
 
       statements.push(
         db.prepare(
-          `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
            WHERE (SELECT shares FROM positions WHERE id = ?) >= ?
+             AND (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0
            RETURNING *`
         ).bind(userId, data.symbol, data.shares, data.price, amountCents, commissionCents,
           data.transaction_type, data.trigger_signal ?? null, data.layer, realizedPnlCents, tradeDate, now, data.notes ?? null,
-          position.id, data.shares)
+          data.idempotency_key, position.id, data.shares, userId, data.idempotency_key)
       );
 
       const newShares = position.shares - data.shares;
@@ -250,6 +266,16 @@ transactionRouter.post('/', async (c) => {
       );
     }
 
+    statements.push(db.prepare(
+      `INSERT INTO audit_logs (user_id, action, entity, old_value, new_value, created_at)
+       SELECT ?, 'transaction', 'transactions', NULL, ?, ?
+       WHERE (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0`
+    ).bind(userId, JSON.stringify({
+      symbol: data.symbol, shares: data.shares, price: data.price, amount: amountCents,
+      commission: commissionCents, transaction_type: data.transaction_type, layer: data.layer,
+      realized_pnl: realizedPnlCents, trade_date: tradeDate, idempotency_key: data.idempotency_key,
+    }), now, userId, data.idempotency_key));
+
     const results = await db.batch<TransactionRow>(statements);
 
     // 并发守卫失败：batch 内每条语句共用同一守卫子查询（读取同一快照），
@@ -257,6 +283,12 @@ transactionRouter.post('/', async (c) => {
     const inserted = results[0]?.results[0];
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (!inserted) {
+      const raced = await db.prepare(
+        'SELECT * FROM transactions WHERE user_id = ? AND idempotency_key = ?'
+      ).bind(userId, data.idempotency_key).first<TransactionRow>();
+      if (raced) {
+        return c.json({ success: true, data: raced, duplicate: true, message: '该笔交易已记录（重复请求已忽略）', timestamp: nowIso() });
+      }
       const insufficient = data.transaction_type === 'buy' ? 'Insufficient funds' : 'Insufficient shares';
       const message = data.transaction_type === 'buy'
         ? `${layerLabel}资金池余额不足：可用 ¥${(layerBalance / 100).toFixed(2)}，本次买入需 ¥${(totalCostCents / 100).toFixed(2)}（含佣金），请先充值资金池`

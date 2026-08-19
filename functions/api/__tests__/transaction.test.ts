@@ -30,10 +30,39 @@ describe('POST /api/transactions', () => {
     ]);
     const res = await transactionRouter.request('/', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
-      body: JSON.stringify({ symbol: '511360', shares: 1, price: 2, commission: 500, transaction_type: 'sell', layer: 'safe' }),
+      body: JSON.stringify({ symbol: '511360', shares: 1, price: 2, commission: 500, transaction_type: 'sell', layer: 'safe', idempotency_key: 'tx-key-00000001' }),
     }, testEnv(db), executionCtx);
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe('Invalid input');
+  });
+
+  it('rejects a transaction without idempotency_key', async () => {
+    const db = new FakeD1([sessionRule()]);
+    const res = await transactionRouter.request('/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe' }),
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('验证失败');
+  });
+
+  it('dedupes a repeated idempotency_key', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('SELECT * FROM transactions') && sql.includes('idempotency_key = ?'), rows: [{ id: 42, user_id: 7, symbol: '511360' }] },
+      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 500000, safe_layer_balance: 500000, ambition_layer_balance: 0 }] },
+      { match: sql => sql.includes('FROM positions'), rows: [] },
+    ]);
+    const res = await transactionRouter.request('/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe', idempotency_key: 'tx-key-00000002' }),
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { success: boolean; duplicate: boolean; data: { id: number } };
+    expect(json.success).toBe(true);
+    expect(json.duplicate).toBe(true);
+    expect(json.data.id).toBe(42);
+    expect(db.statements.length).toBe(0);
   });
 
   it('records a buy with sufficient funds in cents and a commission-inclusive avg_price', async () => {
@@ -45,9 +74,27 @@ describe('POST /api/transactions', () => {
     ]);
     const res = await transactionRouter.request('/', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
-      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe' }),
+      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe', idempotency_key: 'tx-key-00000003' }),
     }, testEnv(db), executionCtx);
     expect(res.status).toBe(201);
+  });
+
+  it('writes an audit_logs row within the batch', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 500000, safe_layer_balance: 500000, ambition_layer_balance: 0 }] },
+      { match: sql => sql.includes('FROM positions'), rows: [] },
+      { match: sql => sql.includes('INSERT INTO transactions'), rows: [{ id: 99, user_id: 7 }] },
+      { match: sql => sql.includes('INSERT INTO audit_logs'), rows: [{ id: 1 }] },
+    ]);
+    const res = await transactionRouter.request('/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe', idempotency_key: 'tx-key-00000004' }),
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(201);
+    const auditIdx = db.statements.findIndex(sql => sql.includes('INSERT INTO audit_logs'));
+    expect(auditIdx).toBeGreaterThanOrEqual(0);
+    expect(db.statements[auditIdx]).toContain('WHERE (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0');
   });
 
   it('rejects the buy with NO compensation writes when the guard subquery returns 0 rows', async () => {
@@ -65,7 +112,7 @@ describe('POST /api/transactions', () => {
     // if the code still issues a compensation batch, this rule would match 'DELETE FROM' SQL
     const res = await transactionRouter.request('/', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
-      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe' }),
+      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe', idempotency_key: 'tx-key-00000005' }),
     }, testEnv(db), executionCtx);
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe('Insufficient funds');

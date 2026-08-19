@@ -189,6 +189,30 @@ describe('POST /api/portfolio/deposit', () => {
     expect(json.success).toBe(true);
     expect(json.data.duplicate).toBe(true);
   });
+
+  it('writes an audit_logs row within the deposit batch', async () => {
+    const db = new FakeD1([
+      { match: sql => sql.includes('FROM sessions'), rows: [SESSION_ROW] },
+      { match: sql => sql.includes('SELECT preferences FROM users'), rows: [PREFS_ROW] },
+      { match: sql => sql.includes('UPDATE portfolio'), rows: [{ total_balance: 600000, safe_layer_balance: 600000, ambition_layer_balance: 500000 }] },
+      { match: sql => sql.includes('INSERT INTO deposits'), rows: [{ id: 1 }] },
+      { match: sql => sql.includes('INSERT INTO audit_logs'), rows: [{ id: 1 }] },
+    ]);
+    const res = await portfolioRouter.request('/deposit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: 'deposit-key-002' }),
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { success: boolean; data: { duplicate: boolean } };
+    expect(json.success).toBe(true);
+    expect(json.data.duplicate).toBe(false);
+
+    expect(db.statements.length).toBe(3);
+    const auditIdx = db.statements.findIndex(sql => sql.includes('INSERT INTO audit_logs'));
+    expect(auditIdx).toBeGreaterThanOrEqual(0);
+    expect(db.statements[auditIdx]).toContain("'deposit'");
+    expect(db.statements[auditIdx]).toContain('WHERE (SELECT COUNT(*) FROM deposits WHERE user_id = ? AND idempotency_key = ?) = 0');
+  });
 });
 
 describe('GET /api/portfolio trigger line resolution', () => {

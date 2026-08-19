@@ -260,6 +260,11 @@ portfolioRouter.post('/deposit', async (c) => {
         `INSERT INTO deposits (user_id, amount_cents, idempotency_key, created_at) VALUES (?, ?, ?, ?)
          ON CONFLICT(user_id, idempotency_key) DO NOTHING RETURNING *`
       ).bind(userId, amount_cents, idempotency_key, now),
+      db.prepare(
+        `INSERT INTO audit_logs (user_id, action, entity, old_value, new_value, created_at)
+         SELECT ?, 'deposit', 'portfolio', NULL, ?, ?
+         WHERE (SELECT COUNT(*) FROM deposits WHERE user_id = ? AND idempotency_key = ?) = 0`
+      ).bind(userId, JSON.stringify({ amount_cents, idempotency_key, safe_added_cents: safeAddedCents, ambition_added_cents: ambitionAddedCents }), now, userId, idempotency_key),
     ]);
 
     const updated = results[0]?.results[0] as { total_balance: number; safe_layer_balance: number; ambition_layer_balance: number } | undefined;

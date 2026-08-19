@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   realized_pnl INTEGER,
   trade_date TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  notes TEXT
+  notes TEXT,
+  idempotency_key TEXT
 );
 
 -- Market data table for historical prices
@@ -229,6 +230,8 @@ CREATE INDEX IF NOT EXISTS idx_email_whitelist_email ON email_whitelist(email);
 CREATE INDEX IF NOT EXISTS idx_reconciliations_user_date ON reconciliations(user_id, reconciliation_date);
 CREATE INDEX IF NOT EXISTS idx_notification_log_user_type ON notification_log(user_id, notification_type, sent_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_user_trade_date ON transactions(user_id, trade_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_user_idempotency
+  ON transactions(user_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_deposits_user_id ON deposits(user_id);
 CREATE INDEX IF NOT EXISTS idx_dividend_events_user_id ON dividend_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
