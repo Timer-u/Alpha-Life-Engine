@@ -147,6 +147,8 @@ transactionRouter.post('/', async (c) => {
     let safeDelta = 0;
     let ambitionDelta = 0;
     let realizedPnlCents: number | null = null;
+    let auditGuard: string;
+    let auditGuardBinds: unknown[];
 
     if (data.transaction_type === 'buy') {
       if (layerBalance + SHARE_EPSILON < totalCostCents) {
@@ -156,6 +158,9 @@ transactionRouter.post('/', async (c) => {
           message: `${layerLabel}资金池余额不足：可用 ¥${(layerBalance / 100).toFixed(2)}，本次买入需 ¥${(totalCostCents / 100).toFixed(2)}（含佣金），请先充值资金池`,
         }, 400);
       }
+
+      auditGuard = `(SELECT ${layerCol} FROM portfolio WHERE user_id = ?) >= ?`;
+      auditGuardBinds = [userId, totalCostCents];
 
       const newShares = (position?.shares ?? 0) + data.shares;
       const newAvgPrice = position
@@ -222,6 +227,9 @@ transactionRouter.post('/', async (c) => {
         }, 400);
       }
 
+      auditGuard = `(SELECT shares FROM positions WHERE id = ?) >= ?`;
+      auditGuardBinds = [position.id, data.shares];
+
       realizedPnlCents = Math.round((amountCents - commissionCents) - position.avg_price * data.shares * 100);
 
       statements.push(
@@ -269,12 +277,13 @@ transactionRouter.post('/', async (c) => {
     statements.push(db.prepare(
       `INSERT INTO audit_logs (user_id, action, entity, old_value, new_value, created_at)
        SELECT ?, 'transaction', 'transactions', NULL, ?, ?
-       WHERE (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0`
+       WHERE ${auditGuard}
+         AND (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0`
     ).bind(userId, JSON.stringify({
       symbol: data.symbol, shares: data.shares, price: data.price, amount: amountCents,
       commission: commissionCents, transaction_type: data.transaction_type, layer: data.layer,
       realized_pnl: realizedPnlCents, trade_date: tradeDate, idempotency_key: data.idempotency_key,
-    }), now, userId, data.idempotency_key));
+    }), now, ...auditGuardBinds, userId, data.idempotency_key));
 
     const results = await db.batch<TransactionRow>(statements);
 

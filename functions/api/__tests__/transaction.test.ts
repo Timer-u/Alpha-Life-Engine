@@ -94,7 +94,8 @@ describe('POST /api/transactions', () => {
     expect(res.status).toBe(201);
     const auditIdx = db.statements.findIndex(sql => sql.includes('INSERT INTO audit_logs'));
     expect(auditIdx).toBeGreaterThanOrEqual(0);
-    expect(db.statements[auditIdx]).toContain('WHERE (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0');
+    expect(db.statements[auditIdx]).toContain('(SELECT safe_layer_balance FROM portfolio WHERE user_id = ?) >= ?');
+    expect(db.statements[auditIdx]).toContain('(SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0');
   });
 
   it('rejects the buy with NO compensation writes when the guard subquery returns 0 rows', async () => {
@@ -117,6 +118,55 @@ describe('POST /api/transactions', () => {
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe('Insufficient funds');
     expect(compensated).toBe(false);
+  });
+
+  it('writes NO audit row when a first-attempt buy is guard-rejected', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('INSERT INTO transactions'), rows: [], changes: 0 },
+      // audit guardful rule: only matches when the audit INSERT shares the balance guard;
+      // a guardless audit statement would fall through to the changes-1 rule below
+      { match: sql => sql.includes('INSERT INTO audit_logs') && sql.includes('FROM portfolio'), rows: [], changes: 0 },
+      { match: sql => sql.includes('INSERT INTO audit_logs'), rows: [{ id: 1 }], changes: 1 },
+      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 500000, safe_layer_balance: 500000, ambition_layer_balance: 0 }] },
+      { match: sql => sql.includes('FROM positions'), rows: [] },
+    ]);
+    const res = await transactionRouter.request('/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe', idempotency_key: 'tx-key-00000006' }),
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('Insufficient funds');
+
+    const auditIdx = db.statements.findIndex(sql => sql.includes('INSERT INTO audit_logs'));
+    expect(auditIdx).toBeGreaterThanOrEqual(0);
+    expect(db.statements[auditIdx]).toContain('(SELECT safe_layer_balance FROM portfolio WHERE user_id = ?) >= ?');
+    expect(db.statements[auditIdx]).toContain('(SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0');
+    expect(db.statementChanges[auditIdx]).toBe(0);
+  });
+
+  it('writes NO audit row when a first-attempt sell is guard-rejected', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('INSERT INTO transactions'), rows: [], changes: 0 },
+      // audit guardful rule: only matches when the audit INSERT shares the position guard
+      { match: sql => sql.includes('INSERT INTO audit_logs') && sql.includes('FROM positions'), rows: [], changes: 0 },
+      { match: sql => sql.includes('INSERT INTO audit_logs'), rows: [{ id: 1 }], changes: 1 },
+      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 500000, safe_layer_balance: 500000, ambition_layer_balance: 0 }] },
+      { match: sql => sql.includes('FROM positions'), rows: [{ id: 1, shares: 100, avg_price: 10 }] },
+    ]);
+    const res = await transactionRouter.request('/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'sell', layer: 'safe', idempotency_key: 'tx-key-00000007' }),
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('Insufficient shares');
+
+    const auditIdx = db.statements.findIndex(sql => sql.includes('INSERT INTO audit_logs'));
+    expect(auditIdx).toBeGreaterThanOrEqual(0);
+    expect(db.statements[auditIdx]).toContain('(SELECT shares FROM positions WHERE id = ?) >= ?');
+    expect(db.statements[auditIdx]).toContain('(SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0');
+    expect(db.statementChanges[auditIdx]).toBe(0);
   });
 });
 
