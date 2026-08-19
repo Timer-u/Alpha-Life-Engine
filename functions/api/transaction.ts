@@ -149,6 +149,7 @@ transactionRouter.post('/', async (c) => {
     let realizedPnlCents: number | null = null;
     let auditGuard: string;
     let auditGuardBinds: unknown[];
+    let txnInsertIndex = 0;
 
     if (data.transaction_type === 'buy') {
       if (layerBalance + SHARE_EPSILON < totalCostCents) {
@@ -167,6 +168,18 @@ transactionRouter.post('/', async (c) => {
         ? (position.shares * position.avg_price + (amountCents + commissionCents) / 100) / newShares
         : ((amountCents + commissionCents) / 100) / data.shares;
 
+      statements.push(db.prepare(
+        `INSERT INTO audit_logs (user_id, action, entity, old_value, new_value, created_at)
+         SELECT ?, 'transaction', 'transactions', NULL, ?, ?
+         WHERE ${auditGuard}
+           AND (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0`
+      ).bind(userId, JSON.stringify({
+        symbol: data.symbol, shares: data.shares, price: data.price, amount: amountCents,
+        commission: commissionCents, transaction_type: data.transaction_type, layer: data.layer,
+        realized_pnl: realizedPnlCents, trade_date: tradeDate, idempotency_key: data.idempotency_key,
+      }), now, ...auditGuardBinds, userId, data.idempotency_key));
+
+      txnInsertIndex = statements.length;
       statements.push(
         db.prepare(
           `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key)
@@ -232,6 +245,18 @@ transactionRouter.post('/', async (c) => {
 
       realizedPnlCents = Math.round((amountCents - commissionCents) - position.avg_price * data.shares * 100);
 
+      statements.push(db.prepare(
+        `INSERT INTO audit_logs (user_id, action, entity, old_value, new_value, created_at)
+         SELECT ?, 'transaction', 'transactions', NULL, ?, ?
+         WHERE ${auditGuard}
+           AND (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0`
+      ).bind(userId, JSON.stringify({
+        symbol: data.symbol, shares: data.shares, price: data.price, amount: amountCents,
+        commission: commissionCents, transaction_type: data.transaction_type, layer: data.layer,
+        realized_pnl: realizedPnlCents, trade_date: tradeDate, idempotency_key: data.idempotency_key,
+      }), now, ...auditGuardBinds, userId, data.idempotency_key));
+
+      txnInsertIndex = statements.length;
       statements.push(
         db.prepare(
           `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key)
@@ -274,22 +299,11 @@ transactionRouter.post('/', async (c) => {
       );
     }
 
-    statements.push(db.prepare(
-      `INSERT INTO audit_logs (user_id, action, entity, old_value, new_value, created_at)
-       SELECT ?, 'transaction', 'transactions', NULL, ?, ?
-       WHERE ${auditGuard}
-         AND (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0`
-    ).bind(userId, JSON.stringify({
-      symbol: data.symbol, shares: data.shares, price: data.price, amount: amountCents,
-      commission: commissionCents, transaction_type: data.transaction_type, layer: data.layer,
-      realized_pnl: realizedPnlCents, trade_date: tradeDate, idempotency_key: data.idempotency_key,
-    }), now, ...auditGuardBinds, userId, data.idempotency_key));
-
     const results = await db.batch<TransactionRow>(statements);
 
-    // 并发守卫失败：batch 内每条语句共用同一守卫子查询（读取同一快照），
+    // 并发守卫失败：batch 内每条语句共用同一守卫子查询（顺序执行、后见先写），
     // 任一守卫不满足则首条 INSERT 无返回行，整体拒绝本次交易（无补偿回滚）。
-    const inserted = results[0]?.results[0];
+    const inserted = results[txnInsertIndex]?.results[0];
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (!inserted) {
       const raced = await db.prepare(

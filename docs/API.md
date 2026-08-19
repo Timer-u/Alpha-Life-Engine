@@ -147,22 +147,33 @@ Allowed fields: `total_balance`, `safe_layer_balance`, `ambition_layer_balance`
 
 ### POST /api/portfolio/deposit
 
-Recharge the fund pool. The amount is automatically split into safe/ambition layers using the active allocation (evolved strategy params, or LCH age-based fallback).
+Recharge the fund pool. The amount is automatically split into safe/ambition layers using the active allocation (evolved strategy params, or LCH age-based fallback). Idempotent via `idempotency_key` (min 8, max 64 chars); a repeated key returns `duplicate: true` and does not credit the pool again.
 
-**Request:** `{ "amount": 2000 }`
+**Request:**
+```json
+{ "amount_cents": 200000, "idempotency_key": "deposit-key-20260101" }
+```
 
-**Response:** `200`
+**Response:** `200` (first attempt)
 ```json
 {
   "data": {
-    "amount": 2000,
-    "safe_added": 1200.00,
-    "ambition_added": 800.00,
+    "duplicate": false,
+    "amount_cents": 200000,
+    "safe_added_cents": 120000,
+    "ambition_added_cents": 80000,
     "safe_ratio": 0.6,
     "ambition_ratio": 0.4,
     "allocation_source": "lch",
-    "portfolio": { "total_balance": 2000.00, "safe_layer_balance": 1200.00, "ambition_layer_balance": 800.00 }
+    "portfolio": { "total_balance": 200000, "safe_layer_balance": 120000, "ambition_layer_balance": 80000 }
   }
+}
+```
+
+**Response:** `200` (duplicate `idempotency_key` → `duplicate: true`, no re-credit)
+```json
+{
+  "data": { "duplicate": true, "amount_cents": 200000, "safe_added_cents": 0, "ambition_added_cents": 0, "safe_ratio": 0.6, "ambition_ratio": 0.4, "allocation_source": "lch", "portfolio": {} }
 }
 ```
 
@@ -194,6 +205,7 @@ Create a new transaction record. Atomically updates positions and the fund pool:
 
 - **buy** — rejects with `400` if the layer's cash balance is insufficient; deducts `amount + commission` from the layer, upserts the position (weighted-average cost)
 - **sell** — rejects with `400` if held shares are insufficient; credits `amount - commission` back to the layer, reduces/removes the position
+- **idempotency_key** is REQUIRED (min 8, max 64 chars). Repeating a key that already exists returns `200` with `duplicate: true` and the previously recorded transaction instead of creating a new one.
 
 **Request:**
 ```json
@@ -205,9 +217,22 @@ Create a new transaction record. Atomically updates positions and the fund pool:
   "transaction_type": "buy",
   "layer": "safe",
   "trigger_signal": "NORMAL",
-  "notes": "optional"
+  "notes": "optional",
+  "idempotency_key": "tx-20260101-001"
 }
 ```
+
+**Response:** `201` (new transaction)
+```json
+{ "data": { "id": 42, "success": true, "symbol": "511360", "shares": 10, "price": 100.5, "amount": 100500, "commission": 500, "transaction_type": "buy", "layer": "safe", "idempotency_key": "tx-20260101-001" } }
+```
+
+**Response:** `200` (duplicate `idempotency_key` → `duplicate: true`)
+```json
+{ "data": { "id": 42, "success": true, "symbol": "511360" }, "duplicate": true, "message": "该笔交易已记录（重复请求已忽略）" }
+```
+
+**Errors:** `400` — missing/too-short `idempotency_key`, insufficient funds, insufficient shares, sell proceeds below commission
 
 ### POST /api/transactions/calculate-commission
 
@@ -253,10 +278,13 @@ On `EXECUTE` decisions an execution-suggestion email is sent asynchronously (Res
     "layer_allocation": { "safe_amount": 1000.20, "ambition_amount": 666.80 },
     "message": "恐慌入场信号 (BSM >= 1.4)，执行买入 1667 元",
     "next_safe_etf": "511360",
-    "market_data": { "current_price_511360": 100.50, "current_price_511880": 100.00 }
+    "next_ambition_etf": "510300",
+    "market_data": { "511360": 100.50, "510300": 1.550 }
   }
 }
 ```
+
+`market_data` is a dynamic `Record<string, number>` keyed by the chosen ETFs (the current `next_safe_etf` and `next_ambition_etf` prices in yuan), not fixed keys.
 
 ### GET /api/trigger/market-prices
 
@@ -343,3 +371,70 @@ Note: `deposits`/`withdrawals`/`gains`/`fees` are informational only (user-enter
 One-click calibration for a `PENDING` record: sets fund-pool cash to `broker_balance - holdings_value` (floored at 0), re-splits layer cash proportionally (layer ratio clamped to [0,1]; LCH/evolved ratios when the pool was empty), and marks the record `CONFIRMED`.
 
 By definition calibration absorbs the whole discrepancy into pool cash, so the response carries a `warnings` array reminding the user to verify holdings-level mismatches; holdings composition may no longer match the broker reality after calibrating.
+
+---
+
+## Audit Logs
+
+### GET /api/audit-logs?limit=100
+
+List the user's audit trail (most recent first). `limit` is clamped to `[1, 200]`, default `100`.
+
+**Response:** `200`
+```json
+{
+  "data": [
+    { "id": 7, "user_id": 1, "action": "transaction", "entity": "transactions", "old_value": null, "new_value": "{\"symbol\":\"511360\",...}", "created_at": "2026-01-01T00:00:00.000Z" },
+    { "id": 6, "user_id": 1, "action": "deposit", "entity": "portfolio", "old_value": null, "new_value": "{\"amount_cents\":200000,...}", "created_at": "2026-01-01T00:00:00.000Z" }
+  ]
+}
+```
+
+Audit rows are written transactionally with the operation they describe: a `transaction` action only when the trade is actually recorded, a `deposit` action only when the pool is actually credited. Guard-rejected or duplicate operations write no audit row.
+
+---
+
+## Dividends
+
+### POST /api/dividends
+
+Record a cash dividend or split (送股/拆股) event and atomically apply it to the user's current positions in the same symbol. Deduplicated by `(user_id, symbol, ex_date, type)` — a repeated event returns `200` with `duplicate: true` and is not applied twice.
+
+`type` enum: `cash` (requires `amount_per_share`, the per-share cash dividend in yuan) or `split` (requires `split_ratio`).
+
+**Request:**
+```json
+{
+  "symbol": "511360",
+  "ex_date": "2026-01-05",
+  "type": "cash",
+  "amount_per_share": 0.05,
+  "notes": "optional"
+}
+```
+
+**Response:** `201` (new event)
+```json
+{ "data": { "duplicate": false, "symbol": "511360", "ex_date": "2026-01-05", "type": "cash", "amount_per_share": 0.05, "split_ratio": null, "applied_positions": 1 } }
+```
+
+**Response:** `200` (duplicate event → `duplicate: true`)
+```json
+{ "data": { "duplicate": true, "symbol": "511360", "ex_date": "2026-01-05", "type": "cash", "amount_per_share": 0.05, "split_ratio": null } }
+```
+
+Effects: `cash` credits each holding's layer balance with `shares × amount_per_share`; `split` multiplies holding shares by `split_ratio` and divides the average cost price accordingly.
+
+### GET /api/dividends
+
+List dividend/除权 events (most recent 100, ordered by `ex_date` desc).
+
+---
+
+## Export
+
+### GET /api/export
+
+Download the user's complete bookkeeping data as a JSON attachment (`Content-Disposition: attachment; filename="alpha-life-export-<trade date>.json"`).
+
+The payload contains `portfolio`, `positions`, `transactions`, `reconciliations`, `dividend_events`, and `audit_logs`.

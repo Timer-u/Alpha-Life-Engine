@@ -92,8 +92,10 @@ describe('POST /api/transactions', () => {
       body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe', idempotency_key: 'tx-key-00000004' }),
     }, testEnv(db), executionCtx);
     expect(res.status).toBe(201);
+    const txnIdx = db.statements.findIndex(sql => sql.includes('INSERT INTO transactions'));
     const auditIdx = db.statements.findIndex(sql => sql.includes('INSERT INTO audit_logs'));
     expect(auditIdx).toBeGreaterThanOrEqual(0);
+    expect(auditIdx).toBeLessThan(txnIdx);
     expect(db.statements[auditIdx]).toContain('(SELECT safe_layer_balance FROM portfolio WHERE user_id = ?) >= ?');
     expect(db.statements[auditIdx]).toContain('(SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0');
   });

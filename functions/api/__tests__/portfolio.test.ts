@@ -209,7 +209,9 @@ describe('POST /api/portfolio/deposit', () => {
 
     expect(db.statements.length).toBe(3);
     const auditIdx = db.statements.findIndex(sql => sql.includes('INSERT INTO audit_logs'));
+    const depositsIdx = db.statements.findIndex(sql => sql.includes('INSERT INTO deposits'));
     expect(auditIdx).toBeGreaterThanOrEqual(0);
+    expect(auditIdx).toBeLessThan(depositsIdx);
     expect(db.statements[auditIdx]).toContain("'deposit'");
     expect(db.statements[auditIdx]).toContain('WHERE (SELECT COUNT(*) FROM deposits WHERE user_id = ? AND idempotency_key = ?) = 0');
   });

@@ -25,7 +25,10 @@ export async function fetchSinaHistory(
   return response.text();
 }
 
-export function parseSinaHistory(text: string): SinaHistoryRow[] {
+export function parseSinaHistory(text: string, symbol = ''): SinaHistoryRow[] {
+  if (!text.includes('=')) {
+    throw new Error(`Sina response parse failed${symbol ? ` for ${symbol}` : ''}: payload missing '=' marker`);
+  }
   const payload = text.split('=')[1].split(';')[0].replaceAll('"', '');
   const rows = decodeSinaKlc(payload);
   for (const row of rows) {
@@ -55,37 +58,42 @@ export async function runScheduledMarketUpdate(env: Env, now: Date = new Date())
   const statements: D1PreparedStatement[] = [];
   const updatedSymbols: string[] = [];
   let insertedRows = 0;
-  const allSymbols: string[] = [];
+  let firstSymbolError: unknown;
 
   for (const symbol of TRACKED_SYMBOLS) {
-    const mark = marks.get(symbol) ?? '';
-    const startDate = mark ? shiftDate(mark, -HIGH_WATER_OVERLAP_DAYS) : FULL_HISTORY_START;
-    const text = await fetchSinaHistory(symbol, startDate);
-    const rows = parseSinaHistory(text).filter(r => r.date > mark && r.date <= today);
-    if (rows.length === 0) continue;
-    allSymbols.push(symbol);
+    try {
+      const mark = marks.get(symbol) ?? '';
+      const startDate = mark ? shiftDate(mark, -HIGH_WATER_OVERLAP_DAYS) : FULL_HISTORY_START;
+      const text = await fetchSinaHistory(symbol, startDate);
+      const rows = parseSinaHistory(text, symbol).filter(r => r.date > mark && r.date <= today);
+      if (rows.length === 0) continue;
 
-    const validated = rows.map(r => validateMarketRow(
-      { symbol, date: r.date, open: String(r.open), high: String(r.high), low: String(r.low), close: String(r.close), volume: String(r.volume) },
-      0
-    ));
-    for (let i = 0; i < validated.length; i += ROW_BATCH_SIZE) {
-      const chunk = validated.slice(i, i + ROW_BATCH_SIZE);
-      const values = chunk.map(r =>
-        `('${r.symbol}', '${r.date}', ${r.open ?? 'NULL'}, ${r.high ?? 'NULL'}, ${r.low ?? 'NULL'}, ${r.close}, ${r.volume})`
-      ).join(',');
-      statements.push(env.DB.prepare(
-        `INSERT OR IGNORE INTO market_data (symbol, date, open, high, low, close, volume) VALUES ${values}`
+      const validated = rows.map(r => validateMarketRow(
+        { symbol, date: r.date, open: String(r.open), high: String(r.high), low: String(r.low), close: String(r.close), volume: String(r.volume) },
+        0
       ));
+      for (let i = 0; i < validated.length; i += ROW_BATCH_SIZE) {
+        const chunk = validated.slice(i, i + ROW_BATCH_SIZE);
+        const values = chunk.map(r =>
+          `('${r.symbol}', '${r.date}', ${r.open ?? 'NULL'}, ${r.high ?? 'NULL'}, ${r.low ?? 'NULL'}, ${r.close}, ${r.volume})`
+        ).join(',');
+        statements.push(env.DB.prepare(
+          `INSERT OR IGNORE INTO market_data (symbol, date, open, high, low, close, volume) VALUES ${values}`
+        ));
+      }
+      insertedRows += validated.length;
+      updatedSymbols.push(symbol);
+    } catch (err) {
+      firstSymbolError ??= err;
+      console.warn(`[market-update] symbol failed: ${symbol}`, err);
     }
-    insertedRows += validated.length;
-    updatedSymbols.push(symbol);
   }
 
-  const missing = findMissingSymbols(allSymbols, TRACKED_SYMBOLS);
-  if (missing.length === TRACKED_SYMBOLS.length) {
+  if (updatedSymbols.length === 0) {
+    if (firstSymbolError) throw firstSymbolError;
     throw new Error(`Sina returned no data for any tracked symbol on trading day ${today}`);
   }
+  const missing = findMissingSymbols(updatedSymbols, TRACKED_SYMBOLS);
   if (missing.length > 0) {
     console.warn(`[market-update] no data fetched for symbol(s): ${missing.join(', ')}`);
   }

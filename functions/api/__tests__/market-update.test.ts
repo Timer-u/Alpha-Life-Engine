@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MarketValidationError } from '../../../src/lib/market-validation';
 import { runScheduledMarketUpdate } from '../market-update';
-import { TRACKED_SYMBOLS } from '../symbols';
+import { sinaCode, TRACKED_SYMBOLS } from '../symbols';
 
 import { asD1, FakeD1 } from './helpers/fake-d1';
 
@@ -33,6 +33,7 @@ function stubFetch(text: string): ReturnType<typeof vi.fn> {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('runScheduledMarketUpdate', () => {
@@ -85,5 +86,44 @@ describe('runScheduledMarketUpdate', () => {
       MarketValidationError
     );
     expect(db.statements).toEqual([]);
+  });
+
+  it('isolates a per-symbol fetch failure: other symbols still insert', async () => {
+    const db = marketDb();
+    const first = TRACKED_SYMBOLS[0];
+    const others = TRACKED_SYMBOLS.filter(s => s !== first);
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes(sinaCode(first))) return new Response('', { status: 503 });
+      return new Response(SAMPLE_TEXT, { status: 200 });
+    }));
+
+    const result = await runScheduledMarketUpdate(testEnv(db), new Date('2026-08-19T04:00:00Z'));
+
+    expect(result.skipped).toBe(false);
+    expect(result.updatedSymbols).not.toContain(first);
+    expect(result.updatedSymbols.sort()).toEqual([...others].sort());
+    expect(result.insertedRows).toBe(others.length * 2);
+
+    const insertStatements = db.statements.filter(sql => sql.includes('INSERT OR IGNORE INTO market_data'));
+    expect(insertStatements).toHaveLength(others.length);
+  });
+
+  it('warns (does not throw) when a symbol returns a malformed payload without the marker', async () => {
+    const db = marketDb();
+    const first = TRACKED_SYMBOLS[0];
+    const others = TRACKED_SYMBOLS.filter(s => s !== first);
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes(sinaCode(first))) return new Response('not a sina payload', { status: 200 });
+      return new Response(SAMPLE_TEXT, { status: 200 });
+    }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await runScheduledMarketUpdate(testEnv(db), new Date('2026-08-19T04:00:00Z'));
+
+    expect(result.updatedSymbols).not.toContain(first);
+    expect(result.updatedSymbols.sort()).toEqual([...others].sort());
+    const calls = warnSpy.mock.calls.map(call => String(call[1] ?? ''));
+    expect(calls.some(msg => msg.includes('Sina response parse failed for') && msg.includes(first))).toBe(true);
+    warnSpy.mockRestore();
   });
 });
