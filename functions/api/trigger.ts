@@ -93,6 +93,8 @@ triggerRouter.post('/', async (c) => {
               commission: response.commission,
               nextSafeEtf: response.next_safe_etf,
               nextSafeEtfName: symbolName(response.next_safe_etf),
+              nextAmbitionEtf: response.next_ambition_etf,
+              nextAmbitionEtfName: symbolName(response.next_ambition_etf),
               message: response.message,
             })
           );

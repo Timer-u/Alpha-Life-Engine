@@ -1,5 +1,6 @@
 import {
   type ActiveAllocation,
+  type AllocationWeight,
   type SignalType,
   type TriggerDecision,
   type TriggerInput,
@@ -28,8 +29,19 @@ export class TriggerDecisionEngine {
     return Math.max(Math.round(amount * TRIGGER_CONSTANTS.COMMISSION_RATE), TRIGGER_CONSTANTS.COMMISSION_MIN_CENTS);
   }
 
-  private getNextSafeETF(): '511360' | '511880' {
-    return ETF_CONSTANTS.SAFE_PRIMARY;
+  private pickTopSymbol(allocation: AllocationWeight[] | undefined, fallback: string): string {
+    if (!allocation || allocation.length === 0) return fallback;
+    return allocation.reduce((best, cur) => (cur.weight > best.weight ? cur : best)).symbol;
+  }
+
+  private getNextSafeETF(activeParams: ActiveAllocation | null): string {
+    if (!activeParams || !isEvolvedParams(activeParams)) return ETF_CONSTANTS.SAFE_PRIMARY;
+    return this.pickTopSymbol(activeParams.safe_allocation, ETF_CONSTANTS.SAFE_PRIMARY);
+  }
+
+  private getNextAmbitionETF(activeParams: ActiveAllocation | null): string {
+    if (!activeParams || !isEvolvedParams(activeParams)) return ETF_CONSTANTS.AMBITION_PRIMARY;
+    return this.pickTopSymbol(activeParams.ambition_allocation, ETF_CONSTANTS.AMBITION_PRIMARY);
   }
 
   /**
@@ -92,6 +104,9 @@ export class TriggerDecisionEngine {
       ambition_amount = 0;
     }
 
+    const nextSafeEtf = this.getNextSafeETF(activeParams);
+    const nextAmbitionEtf = this.getNextAmbitionETF(activeParams);
+
     return {
       decision,
       executed_amount,
@@ -101,10 +116,11 @@ export class TriggerDecisionEngine {
         ambition_amount,
       },
       message,
-      next_safe_etf: this.getNextSafeETF(),
+      next_safe_etf: nextSafeEtf,
+      next_ambition_etf: nextAmbitionEtf,
       market_data: {
-        current_price_511360: marketPrices['511360'] ?? 0,
-        current_price_511880: marketPrices['511880'] ?? 0,
+        [nextSafeEtf]: marketPrices[nextSafeEtf] ?? 0,
+        [nextAmbitionEtf]: marketPrices[nextAmbitionEtf] ?? 0,
       },
     };
   }

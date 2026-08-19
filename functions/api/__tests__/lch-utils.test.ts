@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveActiveParams } from '../lch-utils';
+import { normalizeAllocation, resolveActiveParams } from '../lch-utils';
 
 import { asD1, FakeD1 } from './helpers/fake-d1';
 
@@ -50,5 +50,38 @@ describe('resolveActiveParams', () => {
     const { allocation, staleReport } = await resolveActiveParams(asD1(dbWithReport(0.6, 7)), 1);
     expect(staleReport).toBeUndefined();
     expect(allocation?.source).toBe('evolved');
+  });
+});
+
+describe('normalizeAllocation', () => {
+  it('converts a dict allocation to an array of all entries', () => {
+    const result = normalizeAllocation({ '511880': 0.5, '511990': 0.3, '511360': 0.2 }, []);
+    expect(result).toHaveLength(3);
+    expect(result).toEqual(expect.arrayContaining([
+      { symbol: '511880', weight: 0.5 },
+      { symbol: '511990', weight: 0.3 },
+      { symbol: '511360', weight: 0.2 },
+    ]));
+  });
+
+  it('passes array form through and filters invalid entries', () => {
+    const input = [
+      { symbol: '511360', weight: 0.5 },
+      { symbol: '511990', weight: 'oops' },
+      null,
+      { symbol: '510500', weight: 0.5 },
+    ];
+    const fallback = [{ symbol: '511360', weight: 1 }];
+    expect(normalizeAllocation(input, fallback)).toEqual([
+      { symbol: '511360', weight: 0.5 },
+      { symbol: '510500', weight: 0.5 },
+    ]);
+  });
+
+  it('returns the fallback when allocation is undefined or garbage (no 000300)', () => {
+    const fallback = [{ symbol: '510300', weight: 1 }];
+    expect(normalizeAllocation(undefined, fallback)).toEqual(fallback);
+    expect(normalizeAllocation('garbage', fallback)).toEqual(fallback);
+    expect(normalizeAllocation({ '511360': 'abc' }, fallback)).toEqual(fallback);
   });
 });

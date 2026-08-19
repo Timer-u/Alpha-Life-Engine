@@ -1,4 +1,4 @@
-import type { ActiveAllocation } from '../../src/types/api';
+import type { ActiveAllocation, AllocationWeight } from '../../src/types/api';
 import type { D1Database } from '@cloudflare/workers-types';
 
 import { calculateLCHAllocation } from '../../src/lib/lch-allocation';
@@ -21,6 +21,23 @@ export function clampRatio(n: number): number {
 }
 
 const PBO_REJECT_THRESHOLD = 0.5;
+
+export function normalizeAllocation(raw: unknown, fallback: AllocationWeight[]): AllocationWeight[] {
+  if (Array.isArray(raw)) {
+    const arr = raw.filter((w): w is AllocationWeight =>
+      typeof w === 'object' && w !== null &&
+      typeof (w as AllocationWeight).symbol === 'string' &&
+      typeof (w as AllocationWeight).weight === 'number');
+    return arr.length > 0 ? arr : fallback;
+  }
+  if (raw && typeof raw === 'object') {
+    const entries = Object.entries(raw as Record<string, unknown>)
+      .map(([symbol, weight]) => ({ symbol, weight: Number(weight) }))
+      .filter(w => Number.isFinite(w.weight) && w.weight > 0);
+    return entries.length > 0 ? entries : fallback;
+  }
+  return fallback;
+}
 
 function parseBirthPrefs(prefsJson: string | null): { birthYear: number | null; birthMonth: number; birthDay: number } {
   if (!prefsJson) return { birthYear: null, birthMonth: 6, birthDay: 15 };
@@ -90,8 +107,8 @@ export async function resolveActiveParams(db: D1Db, userId: number): Promise<Res
   const bsmThreshold = typeof p.bsm_threshold === 'number' ? p.bsm_threshold : 1.4;
   const maShort = typeof p.ma_short_window === 'number' ? p.ma_short_window : 20;
   const maLong = typeof p.ma_long_window === 'number' ? p.ma_long_window : 60;
-  const safeAlloc = Array.isArray(p.safe_allocation) ? p.safe_allocation as Array<{symbol: string; weight: number}> : [{ symbol: '511360', weight: 1.0 }];
-  const ambitionAlloc = Array.isArray(p.ambition_allocation) ? p.ambition_allocation as Array<{symbol: string; weight: number}> : [{ symbol: '000300', weight: 1.0 }];
+  const safeAlloc = normalizeAllocation(p.safe_allocation, [{ symbol: '511360', weight: 1.0 }]);
+  const ambitionAlloc = normalizeAllocation(p.ambition_allocation, [{ symbol: '510300', weight: 1.0 }]);
 
   return {
     allocation: {

@@ -53,6 +53,8 @@ export interface ExecutionSuggestionParams {
   commission: number;
   nextSafeEtf: string;
   nextSafeEtfName: string;
+  nextAmbitionEtf?: string;
+  nextAmbitionEtfName?: string;
   message: string;
 }
 
@@ -65,6 +67,7 @@ export function executionSuggestionEmailHtml(p: ExecutionSuggestionParams): stri
       <tr><td style="padding:6px 0;color:#6b7280;">进取层</td><td style="text-align:right;color:#2563eb;">${formatCents(p.ambitionAmount)}</td></tr>
       <tr><td style="padding:6px 0;color:#6b7280;">预估佣金</td><td style="text-align:right;">${formatCents(p.commission)}</td></tr>
       <tr><td style="padding:6px 0;color:#6b7280;">安全层标的</td><td style="text-align:right;font-family:monospace;">${p.nextSafeEtf} ${p.nextSafeEtfName}</td></tr>
+      <tr><td style="padding:6px 0;color:#6b7280;">进取层建议标的</td><td style="text-align:right;font-family:monospace;">${p.nextAmbitionEtfName ?? p.nextAmbitionEtf ?? '-'}</td></tr>
     </table>
     <p style="color:#6b7280;font-size:14px;">请在券商 App 中执行后，回到系统记录交易。</p>
   `);

@@ -46,4 +46,33 @@ describe('executionSuggestionEmailHtml', () => {
     expect(html).toContain('¥667.00');
     expect(html).toContain('¥0.50');
   });
+
+  it('renders the ambition ETF suggestion when provided', () => {
+    const html = executionSuggestionEmailHtml({
+      executedAmount: 166700,
+      safeAmount: 100000,
+      ambitionAmount: 66700,
+      commission: 50,
+      nextSafeEtf: '511360',
+      nextSafeEtfName: '海富通短融ETF',
+      nextAmbitionEtf: '510500',
+      nextAmbitionEtfName: '中证500 ETF',
+      message: '触发条件已满足',
+    });
+    expect(html).toContain('进取层建议标的');
+    expect(html).toContain('中证500 ETF');
+  });
+
+  it('falls back to a dash when the ambition ETF is omitted', () => {
+    const html = executionSuggestionEmailHtml({
+      executedAmount: 166700,
+      safeAmount: 100000,
+      ambitionAmount: 66700,
+      commission: 50,
+      nextSafeEtf: '511360',
+      nextSafeEtfName: '海富通短融ETF',
+      message: '触发条件已满足',
+    });
+    expect(html).toContain('进取层建议标的</td><td style="text-align:right;font-family:monospace;">-</td>');
+  });
 });

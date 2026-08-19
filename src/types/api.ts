@@ -23,11 +23,9 @@ export interface TriggerResponse {
     ambition_amount: number;
   };
   message: string;
-  next_safe_etf: '511360' | '511880';
-  market_data: {
-    current_price_511360: number;
-    current_price_511880: number;
-  };
+  next_safe_etf: string;
+  next_ambition_etf: string;
+  market_data: Record<string, number>;
 }
 
 export const TRIGGER_CONSTANTS = {
@@ -42,6 +40,18 @@ export const ETF_CONSTANTS = {
   SAFE_PRIMARY_NAME: '海富通短融ETF',
   SAFE_BACKUP: '511880',
   SAFE_BACKUP_NAME: '银华日利',
+  SAFE_ALL: ['511360', '511880', '511990'],
+  AMBITION_PRIMARY: '510300',
+  AMBITION_PRIMARY_NAME: '沪深300 ETF',
+  AMBITION_ALL: ['510300', '510500', '515080'],
+  NAMES: {
+    '511360': '海富通短融ETF',
+    '511880': '银华日利',
+    '511990': '华宝添益',
+    '510300': '沪深300 ETF',
+    '510500': '中证500 ETF',
+    '515080': '中证红利 ETF',
+  },
 } as const;
 
 // Database Entity Types
