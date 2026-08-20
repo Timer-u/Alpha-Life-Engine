@@ -55,19 +55,6 @@ export function baoCodeToCsvName(code: string): string {
 
 const ASIA_SHANGHAI = 'Asia/Shanghai';
 
-/** Today's date in Asia/Shanghai, formatted YYYY-MM-DD. */
-export function asiaShanghaiToday(): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    timeZone: ASIA_SHANGHAI,
-  }).formatToParts(new Date());
-  const value = (type: string): string =>
-    parts.find(part => part.type === type)?.value ?? '';
-  return `${value('year')}-${value('month')}-${value('day')}`;
-}
-
 /** True when today is Mon-Fri in Asia/Shanghai (a plausible trading day). */
 export function isAsiaShanghaiWeekday(): boolean {
   const weekday = new Intl.DateTimeFormat('en-US', {

@@ -311,15 +311,31 @@ transactionRouter.post('/', async (c) => {
       safeDelta = data.layer === 'safe' ? proceedsCents : 0;
       ambitionDelta = data.layer === 'ambition' ? proceedsCents : 0;
 
-      statements.push(
-        db.prepare(
-          `UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ?
-           WHERE user_id = ? AND (SELECT shares FROM positions WHERE id = ?) >= ?
-             AND ${BATCH_TXN_GUARD}`
-        ).bind(portfolio.total_balance + safeDelta + ambitionDelta,
-          portfolio.safe_layer_balance + safeDelta,
-          portfolio.ambition_layer_balance + ambitionDelta, now, now, userId, position.id, data.shares, userId, data.idempotency_key, requestNonce)
-      );
+      if (newShares <= SHARE_EPSILON) {
+        // 全仓卖出：持仓已在上一条语句被 DELETE（批内顺序执行，后见先写），
+        // 此处不能再引用 positions 的持仓量（子查询为 NULL 会使 UPDATE 永假）。
+        // 股数充足性已由锚点 INSERT 的批前守卫保证，BATCH_TXN_GUARD 足以防止
+        // 重试/并发重复时重复入账。
+        statements.push(
+          db.prepare(
+            `UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ?
+             WHERE user_id = ?
+               AND ${BATCH_TXN_GUARD}`
+          ).bind(portfolio.total_balance + safeDelta + ambitionDelta,
+            portfolio.safe_layer_balance + safeDelta,
+            portfolio.ambition_layer_balance + ambitionDelta, now, now, userId, userId, data.idempotency_key, requestNonce)
+        );
+      } else {
+        statements.push(
+          db.prepare(
+            `UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ?
+             WHERE user_id = ? AND (SELECT shares FROM positions WHERE id = ?) >= ?
+               AND ${BATCH_TXN_GUARD}`
+          ).bind(portfolio.total_balance + safeDelta + ambitionDelta,
+            portfolio.safe_layer_balance + safeDelta,
+            portfolio.ambition_layer_balance + ambitionDelta, now, now, userId, position.id, data.shares, userId, data.idempotency_key, requestNonce)
+        );
+      }
     }
 
     const results = await db.batch<TransactionRow>(statements);
