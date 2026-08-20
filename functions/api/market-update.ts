@@ -1,14 +1,13 @@
 import type { Env } from './[[route]]';
 
 import { findMissingSymbols, validateMarketRow } from '../../src/lib/market-validation';
-import { asiaShanghaiDate, isTradingDay, shiftDate } from '../../src/lib/trading-calendar';
+import { asiaShanghaiDate, isTradingDay } from '../../src/lib/trading-calendar';
 
 import { decodeSinaKlc, type SinaKlineRow } from './sina-klc-decoder';
 import { sinaCode, TRACKED_SYMBOLS } from './symbols';
 
-const FULL_HISTORY_START = '1990-01-01';
-const HIGH_WATER_OVERLAP_DAYS = 5;
 const ROW_BATCH_SIZE = 500;
+const FETCH_TIMEOUT_MS = 10_000;
 
 export { decodeSinaKlc, type SinaKlineRow };
 
@@ -16,18 +15,32 @@ export type SinaHistoryRow = Omit<SinaKlineRow, 'date'> & { date: string };
 
 export async function fetchSinaHistory(
   symbol: string,
-  _startDate: string,
   fetchFn: typeof fetch = fetch
 ): Promise<string> {
   const url = `https://finance.sina.com.cn/realstock/company/${sinaCode(symbol)}/hisdata_klc2/klc_kl.js`;
-  const response = await fetchFn(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-  if (!response.ok) throw new Error(`Sina fetch failed for ${symbol}: HTTP ${response.status}`);
-  return response.text();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetchFn(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Sina fetch failed for ${symbol}: HTTP ${response.status}`);
+    return response.text();
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(`Sina fetch timed out for ${symbol}`, { cause: err });
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function parseSinaHistory(text: string, symbol = ''): SinaHistoryRow[] {
-  if (!text.includes('=')) {
-    throw new Error(`Sina response parse failed${symbol ? ` for ${symbol}` : ''}: payload missing '=' marker`);
+  // Loose envelope validation: real payloads always carry '=' then ';' after it.
+  if (!text.includes('=') || text.indexOf(';', text.indexOf('=')) === -1) {
+    throw new Error(`Sina response parse failed${symbol ? ` for ${symbol}` : ''}: payload missing '=' or ';' marker`);
   }
   const payload = text.split('=')[1].split(';')[0].replaceAll('"', '');
   const rows = decodeSinaKlc(payload);
@@ -63,8 +76,7 @@ export async function runScheduledMarketUpdate(env: Env, now: Date = new Date())
   for (const symbol of TRACKED_SYMBOLS) {
     try {
       const mark = marks.get(symbol) ?? '';
-      const startDate = mark ? shiftDate(mark, -HIGH_WATER_OVERLAP_DAYS) : FULL_HISTORY_START;
-      const text = await fetchSinaHistory(symbol, startDate);
+      const text = await fetchSinaHistory(symbol);
       const rows = parseSinaHistory(text, symbol).filter(r => r.date > mark && r.date <= today);
       if (rows.length === 0) continue;
 

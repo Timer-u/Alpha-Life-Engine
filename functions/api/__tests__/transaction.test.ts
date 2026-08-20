@@ -170,6 +170,51 @@ describe('POST /api/transactions', () => {
     expect(db.statements[auditIdx]).toContain('(SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0');
     expect(db.statementChanges[auditIdx]).toBe(0);
   });
+
+  it('race-window fallback: pre-check passes, then the batch guard sees the row → duplicate: true, no double mutation', async () => {
+    // Simulates a true concurrent duplicate: the pre-check (SELECT * FROM
+    // transactions) saw NO row, but by the time the batch runs, the competing
+    // request has committed the row — every batch statement (txn INSERT,
+    // position/portfolio mutation, audit) is a guarded no-op and the fallback
+    // re-check returns the raced row as duplicate instead of erroring.
+    const racedRow = {
+      id: 99, user_id: 7, symbol: '511360', shares: 100, price: 10, amount: 100000, commission: 500,
+      transaction_type: 'buy', trigger_signal: null, layer: 'safe', realized_pnl: null,
+      trade_date: '2026-08-19', created_at: '2026-08-19T00:00:00.000Z', notes: null, idempotency_key: 'tx-key-00000008',
+    };
+    let selectTxnCalls = 0;
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('INSERT INTO transactions'), rows: [], changes: 0 },
+      { match: sql => sql.includes('INSERT INTO positions'), rows: [], changes: 0 },
+      { match: sql => sql.includes('UPDATE portfolio'), rows: [], changes: 0 },
+      { match: sql => sql.includes('INSERT INTO audit_logs'), rows: [], changes: 0 },
+      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 500000, safe_layer_balance: 500000, ambition_layer_balance: 0 }] },
+      { match: sql => sql.includes('FROM positions'), rows: [] },
+      {
+        match: sql => sql.includes('SELECT * FROM transactions'),
+        rows: () => {
+          selectTxnCalls += 1;
+          return selectTxnCalls === 1 ? [] : [racedRow];
+        },
+      },
+    ]);
+    const res = await transactionRouter.request('/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ symbol: '511360', shares: 100, price: 10, commission: 500, transaction_type: 'buy', layer: 'safe', idempotency_key: 'tx-key-00000008' }),
+    }, testEnv(db), executionCtx);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { success: boolean; duplicate: boolean; data: { id: number } };
+    expect(json.success).toBe(true);
+    expect(json.duplicate).toBe(true);
+    expect(json.data.id).toBe(99);
+
+    // every mutation statement in the batch was a guarded no-op
+    expect(db.statementChanges[db.statements.findIndex(sql => sql.includes('INSERT INTO transactions'))]).toBe(0);
+    expect(db.statementChanges[db.statements.findIndex(sql => sql.includes('INSERT INTO positions'))]).toBe(0);
+    expect(db.statementChanges[db.statements.findIndex(sql => sql.includes('UPDATE portfolio'))]).toBe(0);
+    expect(db.statementChanges[db.statements.findIndex(sql => sql.includes('INSERT INTO audit_logs'))]).toBe(0);
+  });
 });
 
 describe('GET /api/transactions pagination', () => {

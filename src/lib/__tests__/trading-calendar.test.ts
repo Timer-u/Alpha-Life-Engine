@@ -37,6 +37,15 @@ describe('lastTradingDayOnOrBefore / tradingDaysBetween', () => {
     expect(gap).not.toContain('2026-02-14');
     expect(gap).not.toContain('2026-02-17'); // 春节
   });
+
+  it('returns the earliest trading day at the lower boundary', () => {
+    expect(lastTradingDayOnOrBefore('2013-01-04')).toBe('2013-01-04');
+  });
+
+  it('throws for a date before the earliest supported trading day (no loop)', () => {
+    expect(() => lastTradingDayOnOrBefore('2013-01-03')).toThrow('earliest supported trading day is 2013-01-04');
+    expect(() => lastTradingDayOnOrBefore('2012-12-31')).toThrow('earliest supported trading day is 2013-01-04');
+  });
 });
 
 describe('detectMissingTradingDays', () => {

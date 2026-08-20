@@ -36,13 +36,13 @@ function createDb(): DatabaseSync {
       last_price_update DATETIME DEFAULT CURRENT_TIMESTAMP, layer TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE TABLE transactions (
+CREATE TABLE transactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
       symbol TEXT NOT NULL, shares DECIMAL(15,6) NOT NULL, price REAL NOT NULL,
       amount INTEGER NOT NULL, commission INTEGER NOT NULL,
       transaction_type TEXT NOT NULL, trigger_signal TEXT, layer TEXT NOT NULL,
       realized_pnl INTEGER, trade_date TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      notes TEXT, idempotency_key TEXT
+      notes TEXT, idempotency_key TEXT, request_nonce TEXT
     );
     CREATE TABLE deposits (
       id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
@@ -85,8 +85,14 @@ const auditSql = (guard: string): string => `INSERT INTO audit_logs (user_id, ac
   WHERE ${guard}
     AND (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0`;
 
+// 判别子：仅当 user+idempotency_key 的行由本批次写入（request_nonce = 本次
+// 请求的 UUID）时为 1。锚点 INSERT 最先执行，随后的持仓/资金变更以此判定
+// 是否属于本批次 —— 重试/并发重复时锚点被幂等守卫拦截，本判别子为 0 →
+// 整批无操作。nonce 每请求唯一，同毫秒的并发重复请求也不会误判。
+const batchTxnGuard = `(SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ? AND request_nonce = ?) = 1`;
+
 // BUY path — actual SQL from functions/api/transaction.ts (buy branch).
-function buyBatch(params: { user: number; symbol: string; shares: number; price: number; amount: number; commission: number; type: 'buy'; layer: 'safe' | 'ambition'; tradeDate: string; now: string; key: string; totalCost: number }): Array<{ sql: string; params: SQLInputValue[] }> {
+function buyBatch(params: { user: number; symbol: string; shares: number; price: number; amount: number; commission: number; type: 'buy'; layer: 'safe' | 'ambition'; tradeDate: string; now: string; key: string; nonce: string; totalCost: number; startTotal: number; startSafe: number; startAmbition: number }): Array<{ sql: string; params: SQLInputValue[] }> {
   const audit = {
     sql: auditSql('(SELECT safe_layer_balance FROM portfolio WHERE user_id = ?) >= ?'),
     params: [params.user, JSON.stringify({ symbol: params.symbol, shares: params.shares, price: params.price, amount: params.amount, commission: params.commission, transaction_type: params.type, layer: params.layer, realized_pnl: null, trade_date: params.tradeDate, idempotency_key: params.key }), params.now, params.user, params.totalCost, params.user, params.key],
@@ -94,31 +100,40 @@ function buyBatch(params: { user: number; symbol: string; shares: number; price:
   const statements = [
     audit,
     {
-      sql: `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?
+      // anchor INSERT FIRST: its balance guard sees the pre-batch balance;
+      // subsequent mutations discriminate on this batch's own insert (request_nonce)
+      sql: `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key, request_nonce)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?
         WHERE (SELECT safe_layer_balance FROM portfolio WHERE user_id = ?) >= ?
           AND (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0
         RETURNING id`,
-      params: [params.user, params.symbol, params.shares, params.price, params.amount, params.commission, params.type, null, params.layer, params.tradeDate, params.now, null, params.key, params.user, params.totalCost, params.user, params.key],
+      params: [params.user, params.symbol, params.shares, params.price, params.amount, params.commission, params.type, null, params.layer, params.tradeDate, params.now, null, params.key, params.nonce, params.user, params.totalCost, params.user, params.key],
     },
     {
       sql: `INSERT INTO positions (user_id, symbol, name, shares, avg_price, current_price, market_value, last_price_update, layer, created_at, updated_at)
         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE (SELECT safe_layer_balance FROM portfolio WHERE user_id = ?) >= ?
+          AND ${batchTxnGuard}
         RETURNING id`,
-      params: [params.user, params.symbol, 'name', params.shares, params.price, params.price, params.amount, params.now, params.layer, params.now, params.now, params.user, params.totalCost],
+      params: [params.user, params.symbol, 'name', params.shares, params.price, params.price, params.amount, params.now, params.layer, params.now, params.now, params.user, params.totalCost, params.user, params.key, params.nonce],
     },
     {
       sql: `UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ?
-        WHERE user_id = ? AND safe_layer_balance >= ?`,
-      params: [params.user * 0 + params.amount - params.commission, 0, 0, params.now, params.now, params.user, params.totalCost],
+        WHERE user_id = ? AND safe_layer_balance >= ?
+          AND ${batchTxnGuard}`,
+      params: [
+        params.startTotal + (params.layer === 'safe' ? -params.totalCost : 0) + (params.layer === 'ambition' ? -params.totalCost : 0),
+        params.startSafe + (params.layer === 'safe' ? -params.totalCost : 0),
+        params.startAmbition + (params.layer === 'ambition' ? -params.totalCost : 0),
+        params.now, params.now, params.user, params.totalCost, params.user, params.key, params.nonce,
+      ],
     },
   ] as Array<{ sql: string; params: SQLInputValue[] }>;
   return statements;
 }
 
 // SELL path — actual SQL from functions/api/transaction.ts (sell branch).
-function sellBatch(params: { user: number; symbol: string; shares: number; price: number; amount: number; commission: number; type: 'sell'; layer: 'safe' | 'ambition'; tradeDate: string; now: string; key: string; realizedPnl: number; positionId: number }): Array<{ sql: string; params: SQLInputValue[] }> {
+function sellBatch(params: { user: number; symbol: string; shares: number; price: number; amount: number; commission: number; type: 'sell'; layer: 'safe' | 'ambition'; tradeDate: string; now: string; key: string; nonce: string; realizedPnl: number; positionId: number; startTotal: number; startSafe: number; startAmbition: number }): Array<{ sql: string; params: SQLInputValue[] }> {
   const audit = {
     sql: auditSql('(SELECT shares FROM positions WHERE id = ?) >= ?'),
     params: [params.user, JSON.stringify({ symbol: params.symbol, shares: params.shares, price: params.price, amount: params.amount, commission: params.commission, transaction_type: params.type, layer: params.layer, realized_pnl: params.realizedPnl, trade_date: params.tradeDate, idempotency_key: params.key }), params.now, params.positionId, params.shares, params.user, params.key],
@@ -126,22 +141,30 @@ function sellBatch(params: { user: number; symbol: string; shares: number; price
   const statements = [
     audit,
     {
-      sql: `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      // anchor INSERT FIRST: its shares guard sees the pre-batch holdings
+      sql: `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key, request_nonce)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE (SELECT shares FROM positions WHERE id = ?) >= ?
           AND (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0
         RETURNING id`,
-      params: [params.user, params.symbol, params.shares, params.price, params.amount, params.commission, params.type, null, params.layer, params.realizedPnl, params.tradeDate, params.now, null, params.key, params.positionId, params.shares, params.user, params.key],
+      params: [params.user, params.symbol, params.shares, params.price, params.amount, params.commission, params.type, null, params.layer, params.realizedPnl, params.tradeDate, params.now, null, params.key, params.nonce, params.positionId, params.shares, params.user, params.key],
     },
     {
       sql: `UPDATE positions SET shares = shares - ?, current_price = ?, market_value = ?, last_price_update = ?, updated_at = ?
-        WHERE id = ? AND shares >= ?`,
-      params: [params.shares, params.price, params.amount - params.commission, params.now, params.now, params.positionId, params.shares],
+        WHERE id = ? AND shares >= ?
+          AND ${batchTxnGuard}`,
+      params: [params.shares, params.price, params.amount - params.commission, params.now, params.now, params.positionId, params.shares, params.user, params.key, params.nonce],
     },
     {
       sql: `UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ?
-        WHERE user_id = ? AND (SELECT shares FROM positions WHERE id = ?) >= ?`,
-      params: [params.amount - params.commission, params.amount - params.commission, 0, params.now, params.now, params.user, params.positionId, params.shares],
+        WHERE user_id = ? AND (SELECT shares FROM positions WHERE id = ?) >= ?
+          AND ${batchTxnGuard}`,
+      params: [
+        params.startTotal + (params.layer === 'safe' ? params.amount - params.commission : 0) + (params.layer === 'ambition' ? params.amount - params.commission : 0),
+        params.startSafe + (params.layer === 'safe' ? params.amount - params.commission : 0),
+        params.startAmbition + (params.layer === 'ambition' ? params.amount - params.commission : 0),
+        params.now, params.now, params.user, params.positionId, params.shares, params.user, params.key, params.nonce,
+      ],
     },
   ] as Array<{ sql: string; params: SQLInputValue[] }>;
   return statements;
@@ -183,39 +206,72 @@ const TRADE_DATE = '2026-08-19';
 describe('D1 batch semantics (real SQLite): audit guard ordering', () => {
   it('BUY success: audit fires exactly once, before the txn INSERT', () => {
     const db = createDb();
-    db.prepare('INSERT INTO portfolio (user_id, total_balance, safe_layer_balance, ambition_layer_balance) VALUES (?,?,?,?)')
+db.prepare('INSERT INTO portfolio (user_id, total_balance, safe_layer_balance, ambition_layer_balance) VALUES (?,?,?,?)')
       .run(USER, 500000, 500000, 0);
 
-    runBatch(db, buyBatch({ user: USER, symbol: '511360', shares: 100, price: 10, amount: 100000, commission: 500, type: 'buy', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, totalCost: 100500 }));
+    runBatch(db, buyBatch({ user: USER, symbol: '511360', shares: 100, price: 10, amount: 100000, commission: 500, type: 'buy', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, nonce: 'nonce-1', totalCost: 100500, startTotal: 500000, startSafe: 500000, startAmbition: 0 }));
 
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM audit_logs')).toBe(1);
     const audit = db.prepare('SELECT action, entity, new_value FROM audit_logs').get() as { action: string; entity: string; new_value: string };
     expect(audit.action).toBe('transaction');
     expect(audit.entity).toBe('transactions');
-    expect(JSON.parse(audit.new_value)).toMatchObject({ symbol: '511360', idempotency_key: KEY, transaction_type: 'buy' });
+expect(JSON.parse(audit.new_value)).toMatchObject({ symbol: '511360', idempotency_key: KEY, transaction_type: 'buy' });
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM transactions')).toBe(1);
+    // first run MUST mutate: position created, safe balance debited (total 100500)
+    const position = db.prepare('SELECT shares AS s FROM positions WHERE user_id = ?').get(USER) as { s: number };
+    expect(position.s).toBe(100);
+    const balance = db.prepare('SELECT safe_layer_balance AS b FROM portfolio WHERE user_id = ?').get(USER) as { b: number };
+    expect(balance.b).toBe(500000 - 100500);
   });
 
-  it('BUY duplicate retry (same idempotency_key, row pre-inserted): zero new audit rows', () => {
+it('BUY duplicate retry (same idempotency_key, row pre-inserted): zero new audit rows, no double mutation', () => {
     const db = createDb();
     db.prepare('INSERT INTO portfolio (user_id, total_balance, safe_layer_balance, ambition_layer_balance) VALUES (?,?,?,?)')
       .run(USER, 500000, 500000, 0);
+    db.prepare(`INSERT INTO positions (user_id, symbol, name, shares, avg_price, current_price, market_value, last_price_update, layer, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(USER, '511360', 'name', 100, 10, 10, 100000, NOW, 'safe', NOW, NOW);
     db.prepare(`INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key)
       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, NULL, ?)`)
       .run(USER, '511360', 100, 10, 100000, 500, 'buy', 'safe', TRADE_DATE, NOW, KEY);
 
-    runBatch(db, buyBatch({ user: USER, symbol: '511360', shares: 100, price: 10, amount: 100000, commission: 500, type: 'buy', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, totalCost: 100500 }));
+    runBatch(db, buyBatch({ user: USER, symbol: '511360', shares: 100, price: 10, amount: 100000, commission: 500, type: 'buy', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, nonce: 'nonce-1', totalCost: 100500, startTotal: 500000, startSafe: 500000, startAmbition: 0 }));
 
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM audit_logs')).toBe(0);
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM transactions')).toBe(1);
+    // the whole batch is a no-op on duplicate: no new position row, shares and balance untouched
+    expect(countRows(db, 'SELECT COUNT(*) AS c FROM positions')).toBe(1);
+    const shares = db.prepare('SELECT shares AS s FROM positions WHERE user_id = ?').get(USER) as { s: number };
+    expect(shares.s).toBe(100);
+    const balance = db.prepare('SELECT safe_layer_balance AS b FROM portfolio WHERE user_id = ?').get(USER) as { b: number };
+    expect(balance.b).toBe(500000);
+  });
+
+  it('BUY concurrent duplicate (same key, same millisecond, different request_nonce): second batch is a full no-op', () => {
+    const db = createDb();
+    db.prepare('INSERT INTO portfolio (user_id, total_balance, safe_layer_balance, ambition_layer_balance) VALUES (?,?,?,?)')
+      .run(USER, 500000, 500000, 0);
+
+    runBatch(db, buyBatch({ user: USER, symbol: '511360', shares: 100, price: 10, amount: 100000, commission: 500, type: 'buy', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, nonce: 'nonce-A', totalCost: 100500, startTotal: 500000, startSafe: 500000, startAmbition: 0 }));
+    // concurrent duplicate: SAME idempotency_key AND same created_at timestamp,
+    // but a different request nonce (the losing request's own UUID) — must no-op
+    runBatch(db, buyBatch({ user: USER, symbol: '511360', shares: 100, price: 10, amount: 100000, commission: 500, type: 'buy', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, nonce: 'nonce-B', totalCost: 100500, startTotal: 500000, startSafe: 500000, startAmbition: 0 }));
+
+    expect(countRows(db, 'SELECT COUNT(*) AS c FROM audit_logs')).toBe(1);
+    expect(countRows(db, 'SELECT COUNT(*) AS c FROM transactions')).toBe(1);
+    expect(countRows(db, 'SELECT COUNT(*) AS c FROM positions')).toBe(1);
+    const shares = db.prepare('SELECT shares AS s FROM positions WHERE user_id = ?').get(USER) as { s: number };
+    expect(shares.s).toBe(100);
+    const balance = db.prepare('SELECT safe_layer_balance AS b FROM portfolio WHERE user_id = ?').get(USER) as { b: number };
+    expect(balance.b).toBe(500000 - 100500);
   });
 
   it('BUY insufficient funds (balance guard fails): zero audit rows', () => {
     const db = createDb();
-    db.prepare('INSERT INTO portfolio (user_id, total_balance, safe_layer_balance, ambition_layer_balance) VALUES (?,?,?,?)')
+db.prepare('INSERT INTO portfolio (user_id, total_balance, safe_layer_balance, ambition_layer_balance) VALUES (?,?,?,?)')
       .run(USER, 1000, 1000, 0);
 
-    runBatch(db, buyBatch({ user: USER, symbol: '511360', shares: 100, price: 10, amount: 100000, commission: 500, type: 'buy', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, totalCost: 100500 }));
+    runBatch(db, buyBatch({ user: USER, symbol: '511360', shares: 100, price: 10, amount: 100000, commission: 500, type: 'buy', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, nonce: 'nonce-1', totalCost: 100500, startTotal: 1000, startSafe: 1000, startAmbition: 0 }));
 
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM audit_logs')).toBe(0);
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM transactions')).toBe(0);
@@ -233,16 +289,21 @@ describe('D1 batch semantics (real SQLite): audit guard ordering', () => {
       .run(USER, '511360', 'name', 100, 10, 10, 100000, NOW, 'safe', NOW, NOW);
     const positionId = (db.prepare('SELECT id FROM positions WHERE user_id = ?').get(USER) as { id: number }).id;
 
-    runBatch(db, sellBatch({ user: USER, symbol: '511360', shares: 10, price: 10, amount: 10000, commission: 500, type: 'sell', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, realizedPnl: 9500, positionId }));
+    runBatch(db, sellBatch({ user: USER, symbol: '511360', shares: 10, price: 10, amount: 10000, commission: 500, type: 'sell', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, nonce: 'nonce-1', realizedPnl: 9500, positionId, startTotal: 1000, startSafe: 1000, startAmbition: 0 }));
 
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM audit_logs')).toBe(1);
     const audit = db.prepare('SELECT action, entity, new_value FROM audit_logs').get() as { action: string; entity: string; new_value: string };
     expect(audit.action).toBe('transaction');
-    expect(JSON.parse(audit.new_value)).toMatchObject({ transaction_type: 'sell', idempotency_key: KEY });
+expect(JSON.parse(audit.new_value)).toMatchObject({ transaction_type: 'sell', idempotency_key: KEY });
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM transactions')).toBe(1);
+    // first run MUST mutate: shares debited (100→90), safe balance credited (net 9500)
+    const shares = db.prepare('SELECT shares AS s FROM positions WHERE id = ?').get(positionId) as { s: number };
+    expect(shares.s).toBe(90);
+    const balance = db.prepare('SELECT safe_layer_balance AS b FROM portfolio WHERE user_id = ?').get(USER) as { b: number };
+    expect(balance.b).toBe(1000 + 9500);
   });
 
-  it('SELL duplicate retry (same idempotency_key, row pre-inserted): zero new audit rows', () => {
+it('SELL duplicate retry (same idempotency_key, row pre-inserted): zero new audit rows, no double mutation', () => {
     const db = createDb();
     db.prepare('INSERT INTO portfolio (user_id, total_balance, safe_layer_balance, ambition_layer_balance) VALUES (?,?,?,?)')
       .run(USER, 1000, 1000, 0);
@@ -254,10 +315,15 @@ describe('D1 batch semantics (real SQLite): audit guard ordering', () => {
       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, NULL, ?)`)
       .run(USER, '511360', 10, 10, 10000, 500, 'sell', 'safe', TRADE_DATE, NOW, KEY);
 
-    runBatch(db, sellBatch({ user: USER, symbol: '511360', shares: 10, price: 10, amount: 10000, commission: 500, type: 'sell', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, realizedPnl: 9500, positionId }));
+    runBatch(db, sellBatch({ user: USER, symbol: '511360', shares: 10, price: 10, amount: 10000, commission: 500, type: 'sell', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, nonce: 'nonce-1', realizedPnl: 9500, positionId, startTotal: 1000, startSafe: 1000, startAmbition: 0 }));
 
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM audit_logs')).toBe(0);
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM transactions')).toBe(1);
+    // the whole batch is a no-op on duplicate: shares and balance untouched
+    const shares = db.prepare('SELECT shares AS s FROM positions WHERE id = ?').get(positionId) as { s: number };
+    expect(shares.s).toBe(100);
+    const balance = db.prepare('SELECT safe_layer_balance AS b FROM portfolio WHERE user_id = ?').get(USER) as { b: number };
+    expect(balance.b).toBe(1000);
   });
 
   it('SELL insufficient shares (shares guard fails): zero audit rows', () => {
@@ -269,7 +335,7 @@ describe('D1 batch semantics (real SQLite): audit guard ordering', () => {
       .run(USER, '511360', 'name', 5, 10, 10, 5000, NOW, 'safe', NOW, NOW);
     const positionId = (db.prepare('SELECT id FROM positions WHERE user_id = ?').get(USER) as { id: number }).id;
 
-    runBatch(db, sellBatch({ user: USER, symbol: '511360', shares: 10, price: 10, amount: 10000, commission: 500, type: 'sell', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, realizedPnl: 9500, positionId }));
+    runBatch(db, sellBatch({ user: USER, symbol: '511360', shares: 10, price: 10, amount: 10000, commission: 500, type: 'sell', layer: 'safe', tradeDate: TRADE_DATE, now: NOW, key: KEY, nonce: 'nonce-1', realizedPnl: 9500, positionId, startTotal: 1000, startSafe: 1000, startAmbition: 0 }));
 
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM audit_logs')).toBe(0);
     expect(countRows(db, 'SELECT COUNT(*) AS c FROM transactions')).toBe(0);

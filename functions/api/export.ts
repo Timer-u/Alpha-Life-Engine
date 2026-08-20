@@ -15,6 +15,7 @@ exportRouter.get('/', async (c) => {
   try {
     const userId = c.get('userId');
     const db = c.env.DB;
+    // TODO: future work — streaming/paginated export for large accounts (Worker 128MB memory limit).
     const [portfolio, positions, transactions, reconciliations, dividends, auditLogs] = await Promise.all([
       db.prepare('SELECT * FROM portfolio WHERE user_id = ?').bind(userId).first(),
       db.prepare('SELECT * FROM positions WHERE user_id = ?').bind(userId).all(),

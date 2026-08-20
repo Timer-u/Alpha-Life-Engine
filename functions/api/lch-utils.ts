@@ -2,6 +2,7 @@ import type { ActiveAllocation, AllocationWeight } from '../../src/types/api';
 import type { D1Database } from '@cloudflare/workers-types';
 
 import { calculateLCHAllocation } from '../../src/lib/lch-allocation';
+import { ETF_CONSTANTS } from '../../src/types/api';
 
 export interface ResolveActiveParamsResult {
   allocation: ActiveAllocation | null;
@@ -107,8 +108,8 @@ export async function resolveActiveParams(db: D1Db, userId: number): Promise<Res
   const bsmThreshold = typeof p.bsm_threshold === 'number' ? p.bsm_threshold : 1.4;
   const maShort = typeof p.ma_short_window === 'number' ? p.ma_short_window : 20;
   const maLong = typeof p.ma_long_window === 'number' ? p.ma_long_window : 60;
-  const safeAlloc = normalizeAllocation(p.safe_allocation, [{ symbol: '511360', weight: 1.0 }]);
-  const ambitionAlloc = normalizeAllocation(p.ambition_allocation, [{ symbol: '510300', weight: 1.0 }]);
+  const safeAlloc = normalizeAllocation(p.safe_allocation, [{ symbol: ETF_CONSTANTS.SAFE_PRIMARY, weight: 1.0 }]);
+  const ambitionAlloc = normalizeAllocation(p.ambition_allocation, [{ symbol: ETF_CONSTANTS.AMBITION_PRIMARY, weight: 1.0 }]);
 
   return {
     allocation: {

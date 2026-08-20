@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 
 import { sessionMiddleware } from './auth';
+import { TRACKED_SYMBOLS } from './symbols';
 
 const dividendsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -14,7 +15,7 @@ function nowIso(): string {
 const EX_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const dividendSchema = z.object({
-  symbol: z.string().min(1),
+  symbol: z.string().min(1).refine(s => TRACKED_SYMBOLS.includes(s), '仅支持系统跟踪的 ETF 标的'),
   ex_date: z.string().regex(EX_DATE_RE, 'ex_date 必须是 YYYY-MM-DD'),
   type: z.enum(['cash', 'split']),
   amount_per_share: z.number().positive().optional(),
@@ -85,6 +86,9 @@ dividendsRouter.post('/', async (c) => {
       amount_per_share: data.amount_per_share ?? null, split_ratio: data.split_ratio ?? null,
     }), now, ...guardArgs));
 
+    // index of the dividend_events INSERT in the batch, captured at build time
+    // so a reorder can never silently break the duplicate-anchor read
+    const dividendInsertIndex = statements.length;
     statements.push(db.prepare(
       `INSERT INTO dividend_events (user_id, symbol, ex_date, type, amount_per_share, split_ratio, notes, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -93,7 +97,7 @@ dividendsRouter.post('/', async (c) => {
       data.amount_per_share ?? null, data.split_ratio ?? null, data.notes ?? null, now));
 
     const results = await db.batch(statements);
-    const inserted = results[statements.length - 1]?.results[0];
+    const inserted = results[dividendInsertIndex]?.results[0];
     if (!inserted) {
       const existing = await db.prepare(
         'SELECT id, ex_date FROM dividend_events WHERE user_id = ? AND symbol = ? AND ex_date = ? AND type = ?'

@@ -1,5 +1,7 @@
-// VERBATIM port of akshare's hk_js_decode (Sina KLC2 JS decoder).
-// Source: akshare/stock/cons.py:239 (akshare 1.18.86). Do NOT edit.
+// READ-ONLY VERBATIM port of akshare's hk_js_decode (Sina KLC2 JS decoder).
+// Source: akshare/stock/cons.py:239 (akshare 1.18.86). NEVER modify this string
+// or the decoder wrapper below — it is an embedded constant, NOT user input
+// (no CSP in workerd; already smoke-tested in workerd).
 // Regenerate with the report's extraction snippet if akshare updates it.
 const SINA_KLC_DECODER_SOURCE = `
 

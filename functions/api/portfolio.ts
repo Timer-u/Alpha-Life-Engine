@@ -247,27 +247,31 @@ portfolioRouter.post('/deposit', async (c) => {
     const safeRatio = allocation?.safe_ratio ?? 0.6;
     const { safeAddedCents, ambitionAddedCents } = splitDepositCents(amount_cents, safeRatio);
 
-    const results = await db.batch([
-      db.prepare(
-        `INSERT INTO audit_logs (user_id, action, entity, old_value, new_value, created_at)
-         SELECT ?, 'deposit', 'portfolio', NULL, ?, ?
-         WHERE (SELECT COUNT(*) FROM deposits WHERE user_id = ? AND idempotency_key = ?) = 0`
-      ).bind(userId, JSON.stringify({ amount_cents, idempotency_key, safe_added_cents: safeAddedCents, ambition_added_cents: ambitionAddedCents }), now, userId, idempotency_key),
-      db.prepare(
-        `UPDATE portfolio
-         SET total_balance = total_balance + ?, safe_layer_balance = safe_layer_balance + ?,
-             ambition_layer_balance = ambition_layer_balance + ?, last_balance_update = ?, updated_at = ?
-         WHERE user_id = ?
-           AND (SELECT COUNT(*) FROM deposits WHERE user_id = ? AND idempotency_key = ?) = 0
-         RETURNING total_balance, safe_layer_balance, ambition_layer_balance`
-      ).bind(amount_cents, safeAddedCents, ambitionAddedCents, now, now, userId, userId, idempotency_key),
-      db.prepare(
-        `INSERT INTO deposits (user_id, amount_cents, idempotency_key, created_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(user_id, idempotency_key) DO NOTHING RETURNING *`
-      ).bind(userId, amount_cents, idempotency_key, now),
-    ]);
+    const statements: D1PreparedStatement[] = [];
+    statements.push(db.prepare(
+      `INSERT INTO audit_logs (user_id, action, entity, old_value, new_value, created_at)
+       SELECT ?, 'deposit', 'portfolio', NULL, ?, ?
+       WHERE (SELECT COUNT(*) FROM deposits WHERE user_id = ? AND idempotency_key = ?) = 0`
+    ).bind(userId, JSON.stringify({ amount_cents, idempotency_key, safe_added_cents: safeAddedCents, ambition_added_cents: ambitionAddedCents }), now, userId, idempotency_key));
+    // index of the portfolio UPDATE in the batch, captured at build time so
+    // reordering the statements can never silently break the success read
+    const updatePortfolioIndex = statements.length;
+    statements.push(db.prepare(
+      `UPDATE portfolio
+       SET total_balance = total_balance + ?, safe_layer_balance = safe_layer_balance + ?,
+           ambition_layer_balance = ambition_layer_balance + ?, last_balance_update = ?, updated_at = ?
+       WHERE user_id = ?
+         AND (SELECT COUNT(*) FROM deposits WHERE user_id = ? AND idempotency_key = ?) = 0
+       RETURNING total_balance, safe_layer_balance, ambition_layer_balance`
+    ).bind(amount_cents, safeAddedCents, ambitionAddedCents, now, now, userId, userId, idempotency_key));
+    statements.push(db.prepare(
+      `INSERT INTO deposits (user_id, amount_cents, idempotency_key, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(user_id, idempotency_key) DO NOTHING RETURNING *`
+    ).bind(userId, amount_cents, idempotency_key, now));
 
-    const updated = results[1]?.results[0] as { total_balance: number; safe_layer_balance: number; ambition_layer_balance: number } | undefined;
+    const results = await db.batch(statements);
+
+    const updated = results[updatePortfolioIndex]?.results[0] as { total_balance: number; safe_layer_balance: number; ambition_layer_balance: number } | undefined;
     if (!updated) {
       const existing = await db.prepare('SELECT amount_cents FROM deposits WHERE user_id = ? AND idempotency_key = ?')
         .bind(userId, idempotency_key).first<{ amount_cents: number }>();

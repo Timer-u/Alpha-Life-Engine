@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   trade_date TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   notes TEXT,
-  idempotency_key TEXT
+  idempotency_key TEXT,
+  request_nonce TEXT
 );
 
 -- Market data table for historical prices

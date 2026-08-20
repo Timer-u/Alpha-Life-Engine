@@ -205,6 +205,46 @@ describe('POST /api/dividends', () => {
     expect(((await splitRes.json()) as { error: string }).error).toBe('验证失败');
   });
 
+  it('rejects a symbol outside the tracked ETF list', async () => {
+    const db = new FakeD1([sessionRule()]);
+
+    const res = await dividendsRouter.request('/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ symbol: '000001', ex_date: '2026-08-10', type: 'cash', amount_per_share: 0.05 }),
+    }, testEnv(db), executionCtx);
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: string; message: string };
+    expect(json.error).toBe('验证失败');
+    expect(json.message).toContain('仅支持系统跟踪的 ETF 标的');
+    expect(db.statements).toEqual([]);
+  });
+
+  it('no-positions branch: event recorded, no position/balance adjustment (201)', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('FROM positions'), rows: [] },
+      auditLogRule([{ id: 1 }], 1),
+      dividendEventRule([{ id: 5, user_id: 7, symbol: '511360' }], 1),
+    ]);
+
+    const res = await dividendsRouter.request('/', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...SESSION_COOKIE },
+      body: JSON.stringify({ symbol: '511360', ex_date: '2026-08-10', type: 'cash', amount_per_share: 0.05 }),
+    }, testEnv(db), executionCtx);
+
+    expect(res.status).toBe(201);
+    const json = (await res.json()) as { success: boolean; data: { duplicate: boolean; applied_positions: number } };
+    expect(json.success).toBe(true);
+    expect(json.data.duplicate).toBe(false);
+    expect(json.data.applied_positions).toBe(0);
+
+    // no position or portfolio mutation issued, just audit + event INSERT
+    expect(findStatement(db, 'UPDATE portfolio')).toBe(-1);
+    expect(findStatement(db, 'UPDATE positions')).toBe(-1);
+    expect(db.statements[db.statements.length - 1]).toContain('INSERT INTO dividend_events');
+  });
+
   it('rejects invalid ex_date format', async () => {
     const db = new FakeD1([sessionRule()]);
 

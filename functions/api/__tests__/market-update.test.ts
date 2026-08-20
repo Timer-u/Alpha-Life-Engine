@@ -108,6 +108,31 @@ describe('runScheduledMarketUpdate', () => {
     expect(insertStatements).toHaveLength(others.length);
   });
 
+  it('warns (does not throw) when a symbol fetch times out: other symbols still insert', async () => {
+    const db = marketDb();
+    const first = TRACKED_SYMBOLS[0];
+    const others = TRACKED_SYMBOLS.filter(s => s !== first);
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes(sinaCode(first))) {
+        const err = new Error('This operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      return new Response(SAMPLE_TEXT, { status: 200 });
+    }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await runScheduledMarketUpdate(testEnv(db), new Date('2026-08-19T04:00:00Z'));
+
+    expect(result.skipped).toBe(false);
+    expect(result.updatedSymbols).not.toContain(first);
+    expect(result.updatedSymbols.sort()).toEqual([...others].sort());
+    expect(result.insertedRows).toBe(others.length * 2);
+    const calls = warnSpy.mock.calls.map(call => String(call[1] ?? ''));
+    expect(calls.some(msg => msg.includes('Sina fetch timed out for') && msg.includes(first))).toBe(true);
+    warnSpy.mockRestore();
+  });
+
   it('warns (does not throw) when a symbol returns a malformed payload without the marker', async () => {
     const db = marketDb();
     const first = TRACKED_SYMBOLS[0];

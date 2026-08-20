@@ -17,6 +17,14 @@ function nowIso(): string {
 
 const SHARE_EPSILON = 1e-6;
 
+// 批内「本批次插入」判别子：批内语句顺序执行（后见先写），锚点 INSERT
+// （transactions）最先执行后，随后的持仓/资金变更以此判定是否属于本批次。
+// 仅当 user+idempotency_key 对应的行由本批次写入（request_nonce = 本次请求
+// 生成的 UUID）时为 1；重试/并发重复时锚点被幂等守卫拦截，本判别子为 0 →
+// 整批无操作。request_nonce 每请求唯一，即使重试发生在同一毫秒也不会误判
+// （created_at 只到毫秒，无法区分同毫秒的并发重复请求）。
+const BATCH_TXN_GUARD = `(SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ? AND request_nonce = ?) = 1`;
+
 transactionRouter.use('*', sessionMiddleware);
 
 const transactionSchema = z.object({
@@ -109,6 +117,7 @@ transactionRouter.post('/', async (c) => {
     const data = parsed.data;
     const db = c.env.DB;
     const now = nowIso();
+    const requestNonce = crypto.randomUUID();
     const tradeDate = tradeDateShanghai();
 
     const amountCents = yuanToCents(data.shares * data.price);
@@ -179,25 +188,31 @@ transactionRouter.post('/', async (c) => {
         realized_pnl: realizedPnlCents, trade_date: tradeDate, idempotency_key: data.idempotency_key,
       }), now, ...auditGuardBinds, userId, data.idempotency_key));
 
+      // 锚点 INSERT 最先执行：它的余额守卫在批前求值（看到扣款前的余额），
+      // 幂等守卫在自身插入前求值（COUNT=0）。随后的持仓/资金变更用
+      // BATCH_TXN_GUARD 判别子（request_nonce = 本次请求的 UUID），只有本批次
+      // 刚写入的 txn 行才满足 —— 重试/并发重复时锚点被幂等守卫拦截，判别子为
+      // 0，整批无操作。
       txnInsertIndex = statements.length;
       statements.push(
         db.prepare(
-          `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?
+          `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key, request_nonce)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?
            WHERE (SELECT ${layerCol} FROM portfolio WHERE user_id = ?) >= ?
              AND (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0
            RETURNING *`
         ).bind(userId, data.symbol, data.shares, data.price, amountCents, commissionCents,
           data.transaction_type, data.trigger_signal ?? null, data.layer, tradeDate, now, data.notes ?? null,
-          data.idempotency_key, userId, totalCostCents, userId, data.idempotency_key)
+          data.idempotency_key, requestNonce, userId, totalCostCents, userId, data.idempotency_key)
       );
 
       if (position) {
         statements.push(
           db.prepare(
             `UPDATE positions SET shares = ?, avg_price = ?, current_price = ?, market_value = ?, last_price_update = ?, updated_at = ?
-             WHERE id = ? AND (SELECT ${layerCol} FROM portfolio WHERE user_id = ?) >= ?`
-          ).bind(newShares, newAvgPrice, data.price, yuanToCents(newShares * data.price), now, now, position.id, userId, totalCostCents)
+             WHERE id = ? AND (SELECT ${layerCol} FROM portfolio WHERE user_id = ?) >= ?
+               AND ${BATCH_TXN_GUARD}`
+          ).bind(newShares, newAvgPrice, data.price, yuanToCents(newShares * data.price), now, now, position.id, userId, totalCostCents, userId, data.idempotency_key, requestNonce)
         );
       } else {
         statements.push(
@@ -205,9 +220,10 @@ transactionRouter.post('/', async (c) => {
             `INSERT INTO positions (user_id, symbol, name, shares, avg_price, current_price, market_value, last_price_update, layer, created_at, updated_at)
              SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
              WHERE (SELECT ${layerCol} FROM portfolio WHERE user_id = ?) >= ?
+               AND ${BATCH_TXN_GUARD}
              RETURNING id`
           ).bind(userId, data.symbol, symbolName(data.symbol), newShares, newAvgPrice, data.price,
-            yuanToCents(newShares * data.price), now, data.layer, now, now, userId, totalCostCents)
+            yuanToCents(newShares * data.price), now, data.layer, now, now, userId, totalCostCents, userId, data.idempotency_key, requestNonce)
         );
       }
 
@@ -217,10 +233,11 @@ transactionRouter.post('/', async (c) => {
       statements.push(
         db.prepare(
           `UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ?
-           WHERE user_id = ? AND ${layerCol} >= ?`
+           WHERE user_id = ? AND ${layerCol} >= ?
+             AND ${BATCH_TXN_GUARD}`
         ).bind(portfolio.total_balance + safeDelta + ambitionDelta,
           portfolio.safe_layer_balance + safeDelta,
-          portfolio.ambition_layer_balance + ambitionDelta, now, now, userId, totalCostCents)
+          portfolio.ambition_layer_balance + ambitionDelta, now, now, userId, totalCostCents, userId, data.idempotency_key, requestNonce)
       );
     } else {
       // 卖出金额需覆盖佣金，否则净回款为负会侵蚀层级资金池
@@ -256,32 +273,37 @@ transactionRouter.post('/', async (c) => {
         realized_pnl: realizedPnlCents, trade_date: tradeDate, idempotency_key: data.idempotency_key,
       }), now, ...auditGuardBinds, userId, data.idempotency_key));
 
+      // 锚点 INSERT 最先执行：持仓守卫在批前求值（看到减仓前的持仓量），
+      // 幂等守卫在自身插入前求值（COUNT=0）。随后持仓/资金变更用
+      // BATCH_TXN_GUARD 判别子（request_nonce），重试/并发重复时整批无操作。
       txnInsertIndex = statements.length;
       statements.push(
         db.prepare(
-          `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          `INSERT INTO transactions (user_id, symbol, shares, price, amount, commission, transaction_type, trigger_signal, layer, realized_pnl, trade_date, created_at, notes, idempotency_key, request_nonce)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
            WHERE (SELECT shares FROM positions WHERE id = ?) >= ?
              AND (SELECT COUNT(*) FROM transactions WHERE user_id = ? AND idempotency_key = ?) = 0
            RETURNING *`
         ).bind(userId, data.symbol, data.shares, data.price, amountCents, commissionCents,
           data.transaction_type, data.trigger_signal ?? null, data.layer, realizedPnlCents, tradeDate, now, data.notes ?? null,
-          data.idempotency_key, position.id, data.shares, userId, data.idempotency_key)
+          data.idempotency_key, requestNonce, position.id, data.shares, userId, data.idempotency_key)
       );
 
       const newShares = position.shares - data.shares;
       if (newShares <= SHARE_EPSILON) {
         statements.push(
           db.prepare(
-            'DELETE FROM positions WHERE id = ? AND (SELECT shares FROM positions WHERE id = ?) >= ?'
-          ).bind(position.id, position.id, data.shares)
+            `DELETE FROM positions WHERE id = ? AND (SELECT shares FROM positions WHERE id = ?) >= ?
+               AND ${BATCH_TXN_GUARD}`
+          ).bind(position.id, position.id, data.shares, userId, data.idempotency_key, requestNonce)
         );
       } else {
         statements.push(
           db.prepare(
             `UPDATE positions SET shares = shares - ?, current_price = ?, market_value = ?, last_price_update = ?, updated_at = ?
-             WHERE id = ? AND shares >= ?`
-          ).bind(data.shares, data.price, yuanToCents(newShares * data.price), now, now, position.id, data.shares)
+             WHERE id = ? AND shares >= ?
+               AND ${BATCH_TXN_GUARD}`
+          ).bind(data.shares, data.price, yuanToCents(newShares * data.price), now, now, position.id, data.shares, userId, data.idempotency_key, requestNonce)
         );
       }
 
@@ -292,17 +314,20 @@ transactionRouter.post('/', async (c) => {
       statements.push(
         db.prepare(
           `UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ?
-           WHERE user_id = ? AND (SELECT shares FROM positions WHERE id = ?) >= ?`
+           WHERE user_id = ? AND (SELECT shares FROM positions WHERE id = ?) >= ?
+             AND ${BATCH_TXN_GUARD}`
         ).bind(portfolio.total_balance + safeDelta + ambitionDelta,
           portfolio.safe_layer_balance + safeDelta,
-          portfolio.ambition_layer_balance + ambitionDelta, now, now, userId, position.id, data.shares)
+          portfolio.ambition_layer_balance + ambitionDelta, now, now, userId, position.id, data.shares, userId, data.idempotency_key, requestNonce)
       );
     }
 
     const results = await db.batch<TransactionRow>(statements);
 
-    // 并发守卫失败：batch 内每条语句共用同一守卫子查询（顺序执行、后见先写），
-    // 任一守卫不满足则首条 INSERT 无返回行，整体拒绝本次交易（无补偿回滚）。
+    // 锚点 INSERT（txnInsertIndex）失败即本次交易未写入：重试/并发重复被幂等
+    // 守卫拦截（无返回行），随后的持仓/资金变更因 BATCH_TXN_GUARD 判别子同样
+    // 整体无操作；余额/持仓不足则在批前守卫即失败。此处回查是否存在已提交的同键
+    // 交易以返回 duplicate 而非报错（无补偿回滚）。
     const inserted = results[txnInsertIndex]?.results[0];
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
     if (!inserted) {

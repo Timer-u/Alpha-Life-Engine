@@ -35,7 +35,6 @@ import {
 
 import { createAkshareFetchScript } from './akshare-fetch';
 import {
-  asiaShanghaiToday,
   baoCodeToCsvName,
   resolvePythonCommand,
   symbolFromCode,
@@ -260,7 +259,7 @@ export async function dailyMarketUpdate(): Promise<void> {
   const startTime = Date.now();
 
   try {
-    console.log(`  Date (Asia/Shanghai): ${asiaShanghaiToday()}  ` +
+    console.log(`  Date (Asia/Shanghai): ${asiaShanghaiDate()}  ` +
       `trading_day: ${isTradingDay(asiaShanghaiDate())}  env: ${env}  db: ${dbName}`);
     console.log(`  Symbols: ${TRACKED_SYMBOLS.map(s => s.code).join(', ')}`);
     console.log('');
@@ -301,7 +300,7 @@ export async function dailyMarketUpdate(): Promise<void> {
 
     console.log('Step 3: Generate SQL');
     const sql = generateInsertSql(data);
-    const sqlPath = resolve(outputDir, `update_${asiaShanghaiToday()}.sql`);
+    const sqlPath = resolve(outputDir, `update_${asiaShanghaiDate()}.sql`);
     writeFileSync(sqlPath, sql, 'utf8');
     console.log(`     SQL file: ${sqlPath}`);
     const insertCount = sql.split('\n').filter(l => l.startsWith('INSERT')).length;

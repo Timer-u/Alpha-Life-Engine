@@ -1,6 +1,7 @@
 import calendar from './trade-calendar.json';
 
 const TRADING_DAYS = new Set<string>(calendar.dates);
+const EARLIEST_TRADING_DAY = calendar.dates[0];
 const THROUGH = calendar.through;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -31,6 +32,9 @@ export function isTradingDay(date: string): boolean {
 }
 
 export function lastTradingDayOnOrBefore(date: string): string {
+  if (date < EARLIEST_TRADING_DAY) {
+    throw new Error(`invalid date: ${date} (earliest supported trading day is ${EARLIEST_TRADING_DAY})`);
+  }
   let cursor = date;
   while (!isTradingDay(cursor)) cursor = shiftDate(cursor, -1);
   return cursor;

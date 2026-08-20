@@ -11,7 +11,7 @@
  */
 
 import { execSync } from 'child_process';
-import { writeFileSync } from 'fs';
+import { existsSync, unlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { resolve } from 'path';
 
@@ -50,29 +50,33 @@ function parseCalendarOutput(json: string): CalendarOutput {
 
 export async function exportTradeCalendar(): Promise<string> {
   const python = resolvePythonCommand();
-  writeFileSync(PY_FILE, PY_SNIPPET, 'utf8');
+  try {
+    writeFileSync(PY_FILE, PY_SNIPPET, 'utf8');
 
-  const stdout = execSync(`${python} "${PY_FILE}"`, {
-    encoding: 'utf8',
-    timeout: 300000,
-  }).trim();
+    const stdout = execSync(`${python} "${PY_FILE}"`, {
+      encoding: 'utf8',
+      timeout: 300000,
+    }).trim();
 
-  const lines = stdout.split('\n').filter(line => line.trim().length > 0);
-  const lastLine = lines[lines.length - 1];
-  if (!lastLine) throw new Error('Trade calendar Python produced no output');
-  const parsed = parseCalendarOutput(lastLine);
+    const lines = stdout.split('\n').filter(line => line.trim().length > 0);
+    const lastLine = lines[lines.length - 1];
+    if (!lastLine) throw new Error('Trade calendar Python produced no output');
+    const parsed = parseCalendarOutput(lastLine);
 
-  const dates = [...new Set(parsed.dates)].sort();
-  const lastDate = dates[dates.length - 1];
-  const schema = {
-    source: 'akshare tool_trade_date_hist_sina',
-    generated_at: new Date().toISOString().slice(0, 10),
-    through: lastDate,
-    dates,
-  };
-  writeFileSync(OUT_FILE, `${JSON.stringify(schema, null, 2)}\n`, 'utf8');
-  console.log(`Wrote ${dates.length} trading days (${CALENDAR_START}..${lastDate}) to ${OUT_FILE}`);
-  return OUT_FILE;
+    const dates = [...new Set(parsed.dates)].sort();
+    const lastDate = dates[dates.length - 1];
+    const schema = {
+      source: 'akshare tool_trade_date_hist_sina',
+      generated_at: new Date().toISOString().slice(0, 10),
+      through: lastDate,
+      dates,
+    };
+    writeFileSync(OUT_FILE, `${JSON.stringify(schema, null, 2)}\n`, 'utf8');
+    console.log(`Wrote ${dates.length} trading days (${CALENDAR_START}..${lastDate}) to ${OUT_FILE}`);
+    return OUT_FILE;
+  } finally {
+    if (existsSync(PY_FILE)) unlinkSync(PY_FILE);
+  }
 }
 
 if (process.argv[1] === import.meta.filename) {

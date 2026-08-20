@@ -49,6 +49,24 @@ describe('GET /api/export', () => {
     expect(json.data.positions).toEqual([{ id: 1, user_id: 7, symbol: '511360' }]);
     expect(json.data.audit_logs).toEqual([{ id: 1, user_id: 7, action: 'transaction' }]);
   });
+
+  it('returns 500 with the standard error shape when a parallel query fails', async () => {
+    const db = new FakeD1([
+      sessionRule(),
+      { match: sql => sql.includes('FROM portfolio'), rows: [{ id: 1, user_id: 7, total_balance: 100000 }] },
+      { match: sql => sql.includes('FROM positions'), rows: [] },
+      { match: sql => sql.includes('FROM transactions'), rows: [] },
+      { match: sql => sql.includes('FROM reconciliations'), rows: [] },
+      { match: sql => sql.includes('FROM dividend_events'), rows: [] },
+      { match: sql => sql.includes('FROM audit_logs'), rows: () => { throw new Error('boom'); } },
+    ]);
+    const res = await exportRouter.request('/', { method: 'GET', headers: SESSION_COOKIE }, testEnv(db), executionCtx);
+    expect(res.status).toBe(500);
+    const json = (await res.json()) as { success: boolean; error: string; message: string };
+    expect(json.success).toBe(false);
+    expect(json.error).toBe('Failed');
+    expect(json.message).toBe('boom');
+  });
 });
 
 describe('GET /api/audit-logs', () => {
