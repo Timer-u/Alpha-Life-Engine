@@ -14,7 +14,7 @@ Personal quantitative DCA system with dual-layer accounts (safe + ambition), 166
 ## Database
 
 - **Schema**: `database/schema.sql` — D1 (SQLite on Cloudflare)
-- **Migrate**: `npm run database:migrate` (local), `npm run database:migrate:prod` (prod)
+- **Migrate**: `npm run database:migrate` (local), `npm run database:migrate:prod` (prod) — versioned runner (`scripts/run-migrations.ts`, `schema_migrations` bookkeeping). 既有库首次迁移需带水位：`--baseline-through=<已人工应用到的文件>`（本地 dev 为 002，生产为 005）；全新库无需参数
 - **Import market SQL**: `npm run database:import-market` (local), `npm run database:import-market:prod` (prod)
 - Dev DB: `alpha-life-dev`, Prod DB: `alpha-life-prod` (IDs in `wrangler.toml`)
 
@@ -23,7 +23,7 @@ Personal quantitative DCA system with dual-layer accounts (safe + ambition), 166
 | Command | What |
 |---|---|
 | `npm run market:init` | Full history download + schema migrate + import D1 |
-| `npm run market:update` | Incremental update (AKShare Sina source, local D1) |
+| `npm run market:update` | Incremental update (AKShare Sina source, local D1; 实际仍全量下载后本地过滤——见脚本头注释) |
 | `npm run market:update:prod` | Incremental update, prod D1 (`--prod` flag) |
 | `npm run market:init:prod` | Full init for production |
 

@@ -47,6 +47,9 @@ __pycache__/
 data/market_data/*.csv
 data/market_data/*.py
 data/market_data/*.sql
+# 回填/演化报告产物（本地生成，勿提交）
+data/backfill_realized_pnl.sql
+data/reports/
 
 .worktrees/
 

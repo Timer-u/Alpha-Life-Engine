@@ -86,17 +86,17 @@ Market Data (CSV) → CPCV → Purge/Embargo → MPT Efficient Frontier
 - Walk-forward parameters (train_window, test_window, step)
 - Monte Carlo parameters (n_simulations, time_horizon)
 
-### `data.py` — Data Loading
+### `api_client.py` — Data Loading
 
-- Loads market data CSV files
-- Computes returns, volatility, correlations
-- Handles missing data and outlier removal
+- Fetches market history from the backend API (`GET /api/market-data/history`, session cookie auth)
+- Drops NULL-close rows (upstream downloads may write NULL) instead of coercing them to 0.0
+- Sorts per-symbol rows by date (does not rely on API ordering)
 
 ## Usage
 
 ```bash
 # Install dependencies
-pip install -r scripts/local-evolver/requirements.txt
+pip install -e ".[dev]"   # 单一事实源 pyproject.toml（scripts/local_evolver/requirements.txt 仅为无 pyproject 环境兜底）
 
 # Run full evolution
 npm run evolve
@@ -107,21 +107,16 @@ python scripts/local-evolver/evolver.py
 
 ## Dependencies
 
-- torch 2.5.1
-- numpy 1.26.4
-- pandas 2.2.3
-- scikit-learn 1.6.0
-- scipy 1.14.1
-- click 8.1.7
-- pyyaml 6.0.2
-- requests 2.32.3
+版本约束以 `pyproject.toml` 为单一事实源（`pip install -e ".[dev]"`），
+主要包括：torch / numpy / pandas / scikit-learn / scipy / click / pyyaml /
+requests / akshare。
 
 ## Output
 
 The evolver generates a strategy report and pushes it to:
 
 ```
-PATCH /api/strategy/report
+POST /api/strategy/reports
 ```
 
 The report includes:

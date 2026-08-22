@@ -96,7 +96,7 @@ Trade records.
 
 ### market_data
 
-ETF daily OHLCV data from BaoStock.
+ETF daily OHLCV data from AKShare Sina (fund_etf_hist_sina).
 
 | Column | Type | Constraints |
 | --- | --- | --- |
