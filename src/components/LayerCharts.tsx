@@ -1,10 +1,10 @@
+import type { EChartsOption } from '../lib/echarts';
 import type { Position } from '../types/api';
-import type { EChartsOption } from 'echarts';
 
-import ReactECharts from 'echarts-for-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 
 import { useLayerPerformance } from '../hooks/usePortfolio';
+import { echarts, ReactEChartsCore as EChart } from '../lib/echarts';
 import { formatCents } from '../lib/money';
 
 interface Props {
@@ -20,7 +20,7 @@ const AMBITION_COLOR = '#2563eb';
  * - 右：进取层持仓份额分布
  */
 export default function LayerCharts({ positions }: Props) {
-  const { performance, isLoading } = useLayerPerformance();
+  const { performance, isLoading, isError } = useLayerPerformance();
   const shouldReduceMotion = useReducedMotion() ?? false;
 
   const ambitionPositions = positions.filter(p => p.layer === 'ambition' && p.market_value > 0);
@@ -80,7 +80,7 @@ export default function LayerCharts({ positions }: Props) {
         itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
         label: { show: false },
         emphasis: { label: { show: true, fontWeight: 'bold' } },
-        data: ambitionPositions.map(p => ({ name: p.symbol + ' ' + p.name, value: Math.round(p.market_value / 100) })),
+        data: ambitionPositions.map(p => ({ name: p.symbol + ' ' + p.name, value: p.market_value / 100 })),
       },
     ],
   };
@@ -115,9 +115,13 @@ export default function LayerCharts({ positions }: Props) {
         <AnimatePresence mode="wait" initial={false}>
           {isLoading ? (
             <motion.div key="loading" className="h-64 rounded-lg bg-gray-100 animate-pulse" {...cardVariants} />
+          ) : isError ? (
+            <motion.p key="error" className="text-sm text-danger-600 text-center py-24" {...cardVariants}>
+              收益数据加载失败，请刷新页面重试
+            </motion.p>
           ) : hasSeries ? (
             <motion.div key="series" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <ReactECharts option={lineOption} style={{ height: 256 }} notMerge />
+              <EChart echarts={echarts} option={lineOption} style={{ height: 256 }} />
             </motion.div>
           ) : (
             <motion.p key="empty" className="text-sm text-gray-400 text-center py-24" {...cardVariants}>
@@ -139,7 +143,7 @@ export default function LayerCharts({ positions }: Props) {
         <AnimatePresence mode="wait" initial={false}>
           {ambitionPositions.length > 0 ? (
             <motion.div key="positions" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <ReactECharts option={donutOption} style={{ height: 256 }} notMerge />
+              <EChart echarts={echarts} option={donutOption} style={{ height: 256 }} />
             </motion.div>
           ) : (
             <motion.p key="empty" className="text-sm text-gray-400 text-center py-24" {...cardVariants}>

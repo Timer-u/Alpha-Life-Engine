@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 
 import DepositForm from '../components/DepositForm';
 import LayerCharts from '../components/LayerCharts';
+import PortfolioNavChart from '../components/PortfolioNavChart';
 import PositionsList from '../components/PositionsList';
 import RecentTransactions from '../components/RecentTransactions';
 import StrategyEvolutionBar from '../components/StrategyEvolutionBar';
@@ -123,7 +124,7 @@ export default function Dashboard() {
               <Link to="/reconciliation" className="text-sm text-gray-400 hover:text-gray-600">对账</Link>
               <Link to="/settings" className="text-sm text-gray-400 hover:text-gray-600">设置</Link>
               <motion.button
-                onClick={() => logout()}
+                onClick={() => { logout().catch(() => { window.location.href = '/login'; }); }}
                 className="text-sm text-gray-500 hover:text-gray-700"
                 whileHover={shouldReduceMotion ? undefined : { y: -1 }}
                 whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
@@ -167,7 +168,20 @@ export default function Dashboard() {
 
         <div className="mb-6">
           <div className="border-b border-gray-200">
-            <nav className="-mb-px flex gap-8" role="tablist" aria-label="仪表盘视图">
+            <nav
+              className="-mb-px flex gap-8"
+              role="tablist"
+              aria-label="仪表盘视图"
+              onKeyDown={e => {
+                // 方向键在两个 tab 间移动焦点（WAI-ARIA tabs 模式）
+                if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+                e.preventDefault();
+                const next = activeTab === 'overview' ? 'transactions' : 'overview';
+                setActiveTab(next);
+                const target = e.currentTarget.querySelector<HTMLButtonElement>(`[data-tab="${next}"]`);
+                target?.focus();
+              }}
+            >
               {(['overview', 'transactions'] as const).map(tab => {
                 const isActive = activeTab === tab;
                 const tabClassName = isActive
@@ -178,7 +192,9 @@ export default function Dashboard() {
                     key={tab}
                     type="button"
                     role="tab"
+                    data-tab={tab}
                     aria-selected={isActive}
+                    tabIndex={isActive ? 0 : -1}
                     onClick={() => setActiveTab(tab)}
                     className={tabClassName}
                     whileHover={shouldReduceMotion ? undefined : { y: -1 }}
@@ -219,6 +235,9 @@ export default function Dashboard() {
                   <p className="text-2xl font-bold text-primary-600">{formatCents(ambitionCash + ambitionHoldings)}</p>
                   <p className="text-xs text-gray-400 mt-1 font-mono">现金 {formatCents(ambitionCash)} · 持仓 {formatCents(ambitionHoldings)}</p>
                 </motion.div>
+              </motion.div>
+              <motion.div variants={itemVariants}>
+                <PortfolioNavChart />
               </motion.div>
               <motion.div variants={itemVariants}>
                 <LayerCharts positions={dashboard.positions} />

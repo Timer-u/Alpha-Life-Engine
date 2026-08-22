@@ -37,7 +37,12 @@ export default function ToastProvider({ children }: { children: React.ReactNode 
   return (
     <ToastContext value={api}>
       {children}
-      <div className="fixed top-4 right-4 z-50 space-y-2 w-80 max-w-[calc(100vw-2rem)] pointer-events-none">
+      <div
+        className="fixed top-4 right-4 z-50 space-y-2 w-80 max-w-[calc(100vw-2rem)] pointer-events-none"
+        role="status"
+        aria-live="polite"
+        aria-atomic="false"
+      >
         <AnimatePresence initial={false} mode="popLayout">
           {toasts.map(t => (
             <motion.div

@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'motion/react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { formatCents } from '../lib/money';
 import { modalBackdropVariants, modalPanelVariants } from '../lib/motion';
@@ -16,12 +16,43 @@ interface Props {
 
 /**
  * 卖出摩擦弹窗：要求逐字输入随机确认串（CONFIRM_SELL-XXXX），
- * 通过增加操作成本来防止冲动卖出。
+ * 通过增加操作成本来防止冲动卖出。Escape 关闭、Tab 焦点圈定在弹窗内。
  */
 export default function SellConfirmModal({ confirmCode, symbol, shares, amount, submitting, onConfirm, onCancel }: Props) {
   const [input, setInput] = useState('');
   const shouldReduceMotion = useReducedMotion() ?? false;
+  const panelRef = useRef<HTMLDivElement>(null);
   const matched = input.trim() === confirmCode;
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const focusables = () =>
+      Array.from(panel.querySelectorAll<HTMLElement>('button, input, [tabindex]:not([tabindex="-1"])'))
+        .filter(el => el.getAttribute('disabled') === null && el.getAttribute('aria-disabled') !== 'true');
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onCancel();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey && (active === first || !panel.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onCancel]);
 
   return (
     <motion.div
@@ -35,6 +66,7 @@ export default function SellConfirmModal({ confirmCode, symbol, shares, amount, 
       exit="exit"
     >
       <motion.div
+        ref={panelRef}
         className="bg-white rounded-xl shadow-xl max-w-md w-full p-6"
         variants={modalPanelVariants(shouldReduceMotion)}
         initial="initial"

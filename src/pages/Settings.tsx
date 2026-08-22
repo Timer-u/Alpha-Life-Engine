@@ -1,14 +1,17 @@
+import type { LCHAllocation } from '../types/api';
+
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
 import { useAuth } from '../hooks/useAuth';
+import { apiFetch } from '../lib/api';
 import { calculateLCHAllocation } from '../lib/lch-allocation';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+import { tradeDateShanghai } from '../lib/money';
 
 function getTodayString(): string {
-  return new Date().toISOString().split('T')[0];
+  // 东八区今天；UTC ISO 在 0-8 点会差一天
+  return tradeDateShanghai();
 }
 
 export default function Settings() {
@@ -22,13 +25,15 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [saving, setSaving] = useState(false);
-  const [preview, setPreview] = useState<{ safe_ratio: number; ambition_ratio: number; age: number } | null>(null);
+  const [preview, setPreview] = useState<LCHAllocation | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(API_BASE + '/api/auth/profile', { credentials: 'include', signal: controller.signal })
-      .then(r => r.json() as Promise<{ success: boolean; data: { preferences?: Record<string, unknown> } }>)
+    let aborted = false;
+    apiFetch('/api/auth/profile', { signal: controller.signal })
+      .then(json => json as { success: boolean; data: { preferences?: Record<string, unknown> } })
       .then(json => {
+        if (aborted) return;
         if (json.success) {
           const p = json.data.preferences ?? {};
           const by = p.birth_year as number | undefined;
@@ -42,22 +47,38 @@ export default function Settings() {
           }
         }
       })
-      .catch((err) => console.error('Failed to fetch profile:', err))
-      .finally(() => setLoading(false));
-    return () => controller.abort();
+      .catch((err) => {
+        // 卸载/StrictMode 重挂载引起的 abort 不是错误，勿刷屏
+        if (aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
+        if (err instanceof Error && err.message === 'UNAUTHORIZED') {
+          setMessage({ type: 'error', text: '会话已过期，请重新登录' });
+          return;
+        }
+        console.error('Failed to fetch profile:', err);
+      })
+      .finally(() => {
+        if (!aborted) setLoading(false);
+      });
+    return () => {
+      aborted = true;
+      controller.abort();
+    };
   }, []);
 
   const handleSave = async () => {
     if (!birthDate) return;
-    const d = new Date(birthDate);
-    const year = d.getFullYear();
-    const month = d.getMonth() + 1;
-    const day = d.getDate();
-    if (year < 1900 || year > new Date().getFullYear()) {
+    // 手动解析 YYYY-MM-DD：new Date('YYYY-MM-DD') 按 UTC 解析，
+    // 本地时区为西半球时 getDate 会错一天
+    const match = birthDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) {
       setMessage({ type: 'error', text: '请输入有效的出生日期' });
       return;
     }
-    if (d.getMonth() !== month - 1) {
+    const year = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10);
+    const day = parseInt(match[3], 10);
+    const parsed = new Date(year, month - 1, day);
+    if (year < 1900 || year > new Date().getFullYear() || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) {
       setMessage({ type: 'error', text: '请输入有效的出生日期' });
       return;
     }
@@ -65,7 +86,7 @@ export default function Settings() {
     setSaving(true);
     setMessage(null);
     try {
-      const res = await fetch(API_BASE + '/api/auth/profile', {
+      const res = await fetch((import.meta.env.VITE_API_BASE_URL || '') + '/api/auth/profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -108,7 +129,7 @@ export default function Settings() {
             </div>
             <div className="flex items-center gap-4">
               <Link to="/" className="text-sm text-primary-600 hover:text-primary-700">返回仪表盘</Link>
-              <motion.button onClick={() => logout()} className="text-sm text-gray-500 hover:text-gray-700" whileHover={shouldReduceMotion ? undefined : { y: -1 }} whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}>退出登录</motion.button>
+              <motion.button onClick={() => { logout().catch(() => setMessage({ type: 'error', text: '退出登录失败，请重试' })); }} className="text-sm text-gray-500 hover:text-gray-700" whileHover={shouldReduceMotion ? undefined : { y: -1 }} whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}>退出登录</motion.button>
             </div>
           </div>
         </div>

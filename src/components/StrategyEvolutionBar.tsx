@@ -8,7 +8,8 @@ import { isEvolvedParams } from '../types/api';
 
 interface Props {
   lastEvolution: string | null;
-  daysSince: number;
+  /** null = 从未演化 */
+  daysSince: number | null;
   pboScore: number | null;
   status: 'green' | 'yellow' | 'red';
 }
@@ -130,7 +131,7 @@ export default function StrategyEvolutionBar({ lastEvolution, daysSince, pboScor
         <div className="flex items-center gap-4">
           <span className={labelClassName}>策略进化状态: {config.label}</span>
           <span className="text-xs text-gray-500">上次: {formatDate(lastEvolution)}</span>
-          <span className="text-xs text-gray-500">已过去: {daysSince === 999 ? 'N/A' : daysSince + ' 天'}</span>
+          <span className="text-xs text-gray-500">已过去: {daysSince === null ? '从未演化' : daysSince + ' 天'}</span>
           {!loading && !error && sourceBadge()}
         </div>
         <div className="flex items-center gap-3">
