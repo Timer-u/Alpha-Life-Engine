@@ -1,7 +1,12 @@
 """Report generation, serialization, and push to cloud API."""
 
 import json
+import logging
 import math
+import os
+import time
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -12,7 +17,7 @@ from config import (
     load_regime_lookback,
     load_synthetic_n_paths,
 )
-from constants import MIN_OBS_FOR_BOOTSTRAP
+from constants import MIN_OBS_FOR_BOOTSTRAP, MIN_OBS_FOR_SHARPE
 from cpcv import generate_cpcv_folds
 from dsr import bootstrap_ci, compute_sharpe_ratio
 from models import (
@@ -27,9 +32,11 @@ from models import (
     PboResult,
     RegimeResult,
     SobolResult,
+    StabilityReport,
     StrategyParameterSet,
     StrategyReportData,
     SyntheticScenarioResult,
+    WalkForwardResult,
     WalkForwardSummary,
 )
 from monte_carlo import run_monte_carlo
@@ -44,9 +51,24 @@ from stability import check_stability
 from synthetic import run_all_scenarios
 from walk_forward import (
     compute_portfolio_returns_for_params,
+    extract_dates_for_symbols,
     extract_prices_for_symbols,
     run_walk_forward,
 )
+
+logger = logging.getLogger(__name__)
+
+# 推送失败/超时时本地兜底目录（原子写，可事后补推）
+DEFAULT_REPORTS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "reports"
+
+
+def utc_now_iso() -> str:
+    """UTC 时间戳，带 Z 后缀（后端 zod `.datetime()` 默认拒绝 +00:00 偏移）。"""
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def utc_z(dt: datetime) -> str:
+    return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def compute_bootstrap_from_walk_forward(
@@ -111,15 +133,14 @@ def generate_report(
     if seed is not None:
         seed_all(seed)
 
-    timestamp = __import__("datetime").datetime.now().isoformat()
+    # UTC 带 Z：服务端 zod `.datetime()` 拒绝 naive/带 +00:00 偏移的时间戳
+    timestamp = utc_now_iso()
 
-    # total_obs must be the SAME min-length source the windowed MPT statistics
-    # validate against (min over symbols of len(close)); symbols[0] is not
-    # guaranteed to be the shortest series.
-    total_obs = min(
-        (len(data.symbols[s].close) for s in symbols if s in data.symbols),
-        default=0,
-    )
+    # total_obs 必须与窗口化 MPT 统计量校验的同一长度源一致：日期对齐后的
+    # 主索引长度（extract_prices_for_symbols），而非 min(len(close))——
+    # 停牌/缺日时两者不同，折窗口索引会落在另一个日历上
+    aligned_prices = extract_prices_for_symbols(data, symbols)
+    total_obs = len(aligned_prices[0]) if aligned_prices else 0
 
     num_groups = 10
     num_test_groups = max(1, round(num_groups * config.cpcv_test_size))
@@ -170,6 +191,8 @@ def generate_report(
         )
 
     # === Walk-Forward with transaction costs ===
+    # config.dca / config.transaction_costs 必须传入主链路：否则优化目标回落
+    # DcaConfig() 默认（1000 元/21 天），与 yaml 配置和 bootstrap CI 口径分裂
     wf_summary = run_walk_forward(
         data,
         symbols,
@@ -182,6 +205,7 @@ def generate_report(
         purge_days=config.purge_days,
         embargo_days=config.embargo_days,
         cost_config=config.transaction_costs,
+        dca_config=config.dca,
     )
 
     pbo_result = PboResult(
@@ -206,11 +230,13 @@ def generate_report(
         config.stability_neighborhood_radius,
         config.stability_gradient_threshold,
         risk_free_rate / 252,
+        cost_config=config.transaction_costs,
+        dca_config=config.dca,
     )
 
     if pbo_result.is_rejected:
         stable = [r for r in wf_summary.results if r.test_sharpe > 0]
-        stable_with_check = []
+        stable_with_check: list[tuple[WalkForwardResult, StabilityReport]] = []
         for r in stable:
             s = check_stability(
                 data,
@@ -219,13 +245,18 @@ def generate_report(
                 config.stability_neighborhood_radius,
                 config.stability_gradient_threshold,
                 risk_free_rate / 252,
+                cost_config=config.transaction_costs,
+                dca_config=config.dca,
             )
             if s.is_stable:
-                stable_with_check.append(r)
+                stable_with_check.append((r, s))
         if stable_with_check:
-            stable_with_check.sort(key=lambda r: r.dsr, reverse=True)
-            recommended = stable_with_check[0].optimal_params
-            stability.is_stable = True
+            stable_with_check.sort(key=lambda pair: pair[0].dsr, reverse=True)
+            best_result, best_stability = stable_with_check[0]
+            recommended = best_result.optimal_params
+            # 报告新推荐参数自己的稳定性（循环里已算出），而非沿用初选参数
+            # 的 gradient/threshold/neighborhood —— 那些数字属于另一组参数
+            stability = best_stability
 
     # === Bootstrap CI (block bootstrap on the recommended strategy's OOS returns) ===
     bootstrap_result = compute_bootstrap_from_walk_forward(
@@ -252,8 +283,9 @@ def generate_report(
             n_states=3,
             hysteresis_window=21,
         )
-    except Exception:  # noqa: S110, BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        # 缺 scipy/sklearn 或运行时错误不能伪装成"正常的 Sideways 报告"
+        logger.warning("Regime detection failed (reporting empty regime): %s", e)
 
     # === Synthetic Stress Scenarios ===
     synthetic_results: list[SyntheticScenarioResult] = []
@@ -268,8 +300,10 @@ def generate_report(
                 days=config.gbm_days,
                 n_paths=n_paths,
             )
-        except Exception:  # noqa: S110, BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "Synthetic stress scenarios failed (reporting no scenarios): %s", e
+            )
 
     # === Sobol Sensitivity ===
     sobol_result = SobolResult()
@@ -322,10 +356,12 @@ def generate_report(
                         test_start,
                         total_obs_wf - 1,
                         p,
+                        config.transaction_costs,
+                        config.dca,
                     )
                     scores[i] = (
                         compute_sharpe_ratio(rets, risk_free_rate / 252)
-                        if len(rets) >= 5
+                        if len(rets) >= MIN_OBS_FOR_SHARPE
                         else -1.0
                     )
                 return scores
@@ -365,6 +401,7 @@ def generate_report(
         from monitoring import detect_drift
 
         all_prices_drift = extract_prices_for_symbols(data, symbols)
+        all_dates_drift = extract_dates_for_symbols(data, symbols)
         if all_prices_drift and len(all_prices_drift[0]) > 50:
             drift_cfg = load_drift_config()
             window_months = drift_cfg.get("window_months", 12)
@@ -384,6 +421,8 @@ def generate_report(
                         best.window.test_start,
                         best.window.test_end,
                         best.optimal_params,
+                        config.transaction_costs,
+                        config.dca,
                     )
 
             # Live: use most recent actual portfolio returns for recommended params
@@ -396,19 +435,18 @@ def generate_report(
                     live_start,
                     total_obs - 1,
                     recommended,
+                    config.transaction_costs,
+                    config.dca,
                 )
 
             if len(backtest_returns) > 20 and len(live_returns) > 20:
-                import datetime
-
-                end_dt = datetime.datetime.now(datetime.UTC)
-                start_dt = end_dt - datetime.timedelta(days=window_months * 30)
-
+                # 窗口日期取数据主索引的真实交易日（live_start 起点与
+                # total_obs-1 终点），而非"当前时间−N×30 天"的编造日历日期
                 drift_result = detect_drift(
                     backtest_returns,
                     live_returns,
-                    window_start=start_dt.strftime("%Y-%m-%d"),
-                    window_end=end_dt.strftime("%Y-%m-%d"),
+                    window_start=all_dates_drift[live_start],
+                    window_end=all_dates_drift[total_obs - 1],
                     psi_threshold=drift_cfg.get("psi_threshold", 0.25),
                     ks_threshold=drift_cfg.get("ks_threshold", 0.05),
                 )
@@ -445,7 +483,9 @@ def _sanitize_for_json(obj: Any) -> Any:
         if math.isnan(obj):
             return None
         if math.isinf(obj):
-            return 1e308 if obj > 0 else -1e308
+            # ±inf 写成 ±1e308 会伪装成"很大的有限数"；显式字符串哨兵
+            # 让异常在报告里可见，而不是被序列化掩盖
+            return "Infinity" if obj > 0 else "-Infinity"
     if isinstance(obj, np.integer):
         return int(obj)
     return obj
@@ -479,11 +519,31 @@ def serialize_report(report: StrategyReportData) -> str:
     )
 
 
+def save_report_locally(
+    report: StrategyReportData,
+    directory: Path | None = None,
+) -> Path:
+    """原子写本地 JSON（临时文件 + os.replace）。
+
+    数小时演化产物在推云前先落盘：一次 502/超时不再丢整轮报告，
+    事后可从本地文件补推。
+    """
+    target_dir = directory if directory is not None else DEFAULT_REPORTS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    safe_ts = report.timestamp.replace(":", "").replace("-", "").replace("T", "_")
+    path = target_dir / f"evolution_report_{safe_ts}.json"
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(serialize_report(report), encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
 def push_report_to_cloud(
     report: StrategyReportData,
     api_base_url: str,
     session_token: str,
     user_id: int = 0,
+    max_attempts: int = 3,
 ) -> dict:
     report_json = serialize_report(report)
 
@@ -493,6 +553,7 @@ def push_report_to_cloud(
         + len(report.recommended_params.ambition_allocation)
     )
 
+    next_dt = datetime.fromisoformat(report.timestamp) + timedelta(days=7)
     payload = {
         "report_data": report_json,
         "pbo_score": report.walk_forward_summary.pbo_score,
@@ -501,21 +562,29 @@ def push_report_to_cloud(
         else 0.0,
         "parameter_count": param_count,
         "evolution_timestamp": report.timestamp,
-        "next_scheduled_evolution": (
-            __import__("datetime").datetime.fromisoformat(report.timestamp)
-            + __import__("datetime").timedelta(days=7)
-        ).isoformat(),
+        "next_scheduled_evolution": utc_z(next_dt),
     }
 
     url = f"{api_base_url}/api/strategy/reports"
-    resp = requests.post(
-        url,
-        json=payload,
-        cookies={"session_token": session_token},
-        timeout=60,
-    )
+    last_error = ""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = requests.post(
+                url,
+                json=payload,
+                cookies={"session_token": session_token},
+                timeout=60,
+            )
+        except requests.RequestException as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+        else:
+            if resp.ok:
+                return {"success": True}
+            last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            # 4xx（非 429）是契约/认证问题，重试不会自愈
+            if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                break
+        if attempt < max_attempts:
+            time.sleep(2.0 * attempt)
 
-    if not resp.ok:
-        return {"success": False, "error": f"HTTP {resp.status_code}: {resp.text}"}
-
-    return {"success": True}
+    return {"success": False, "error": last_error}

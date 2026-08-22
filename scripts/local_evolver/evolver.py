@@ -23,9 +23,25 @@ from api_client import TRACKED_SYMBOLS, fetch_market_data
 from config import load_config
 from constants import DEFAULT_SEED
 from dsr import compute_haircut_sharpe
-from models import DataFrame
-from report import generate_report, push_report_to_cloud, serialize_report
+from models import DataFrame, MarketDataInput
+from report import (
+    generate_report,
+    push_report_to_cloud,
+    save_report_locally,
+    serialize_report,
+)
 from seeding import seed_all
+
+
+def _warn_empty_symbols(data: MarketDataInput) -> None:
+    empty_symbols = [
+        s for s in TRACKED_SYMBOLS if s not in data.symbols or not data.symbols[s].close
+    ]
+    if empty_symbols:
+        click.echo(
+            f"  WARNING: {len(empty_symbols)} symbol(s) have no data: {empty_symbols}",
+            err=True,
+        )
 
 
 @click.command()
@@ -44,24 +60,21 @@ from seeding import seed_all
 )
 @click.option(
     "--gbm-paths",
-    default=10000,
+    default=None,
     type=int,
-    show_default=True,
-    help="Number of Monte Carlo GBM paths",
+    help="Override yaml/默认 MC 路径数 (不传则用 config.yaml / 内置默认)",
 )
 @click.option(
     "--wf-sets",
-    default=200,
+    default=None,
     type=int,
-    show_default=True,
-    help="Number of walk-forward parameter sets to evaluate",
+    help="Override yaml/默认 walk-forward 参数组数 (不传则用 config.yaml / 内置默认)",
 )
 @click.option(
     "--frontier-pts",
-    default=50,
+    default=None,
     type=int,
-    show_default=True,
-    help="Number of efficient frontier points",
+    help="Override yaml/默认有效前沿点数 (不传则用 config.yaml / 内置默认)",
 )
 @click.option(
     "--no-push",
@@ -72,9 +85,9 @@ from seeding import seed_all
 def main(
     api_url: str,
     seed: int,
-    gbm_paths: int,
-    wf_sets: int,
-    frontier_pts: int,
+    gbm_paths: int | None,
+    wf_sets: int | None,
+    frontier_pts: int | None,
     *,
     no_push: bool = False,
 ) -> None:
@@ -95,14 +108,7 @@ def main(
     data = fetch_market_data(api_url)
     click.echo(f"  Loaded {len(data.symbols)} symbols")
 
-    empty_symbols = [
-        s for s in TRACKED_SYMBOLS if s not in data.symbols or not data.symbols[s].close
-    ]
-    if empty_symbols:
-        click.echo(
-            f"  WARNING: {len(empty_symbols)} symbol(s) have no data: {empty_symbols}",
-            err=True,
-        )
+    _warn_empty_symbols(data)
     if all(
         not data.symbols.get(
             s, DataFrame(dates=[], close=[], open=[], high=[], low=[], volume=[])
@@ -112,10 +118,15 @@ def main(
         msg = "All symbols have no market data. Cannot proceed with evolution."
         raise RuntimeError(msg)
 
+    # config.yaml 是单一事实源：CLI 只在显式传参时覆盖，
+    # 否则旧的"CLI 默认值恒覆盖 yaml"会让 yaml 配置静默失效
     config = load_config()
-    config.gbm_paths = gbm_paths
-    config.frontier_points = frontier_pts
-    config.walk_forward_param_sets = wf_sets
+    if gbm_paths is not None:
+        config.gbm_paths = gbm_paths
+    if frontier_pts is not None:
+        config.frontier_points = frontier_pts
+    if wf_sets is not None:
+        config.walk_forward_param_sets = wf_sets
 
     click.echo("\nRunning strategy evolution pipeline...")
     click.echo(f"  GBM paths: {config.gbm_paths}")
@@ -166,6 +177,13 @@ def main(
     click.echo(f"  BSM threshold: {p.bsm_threshold:.2f}")
     click.echo(f"  MA window: {p.ma_short_window}/{p.ma_long_window}")
 
+    # 先原子落盘再推云：推送失败/超时也保得住数小时的演化产物
+    try:
+        report_path = save_report_locally(report)
+        click.echo(f"  Report saved locally: {report_path}")
+    except OSError as exc:
+        click.echo(f"  WARNING: local report save failed: {exc}", err=True)
+
     if no_push:
         click.echo("\n--- DRY RUN: report not pushed to cloud ---")
         report_size = len(serialize_report(report)) / 1024
@@ -177,6 +195,10 @@ def main(
             click.echo("  Report pushed successfully!")
         else:
             click.echo(f"  ERROR: {result.get('error', 'unknown')}", err=True)
+            click.echo(
+                "  The report was saved locally and can be re-pushed later.",
+                err=True,
+            )
             sys.exit(1)
 
     click.echo("\nDone.")

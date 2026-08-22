@@ -28,8 +28,8 @@ from walk_forward import BACKTEST_SYMBOLS
 def test_sanitize_for_json():
     assert _sanitize_for_json(1.0) == 1.0
     assert _sanitize_for_json(float("nan")) is None
-    assert _sanitize_for_json(float("inf")) == 1e308
-    assert _sanitize_for_json(float("-inf")) == -1e308
+    assert _sanitize_for_json(float("inf")) == "Infinity"
+    assert _sanitize_for_json(float("-inf")) == "-Infinity"
 
 
 def test_dataclass_to_dict():
