@@ -65,10 +65,13 @@ dividendsRouter.post('/', async (c) => {
       for (const layer of ['safe', 'ambition'] as const) {
         const delta = layerBalances[layer];
         if (delta <= 0) continue;
+        // 现金分红计入层级余额的同时必须计入 total_balance：
+        // total = safe + ambition 的不变式在充值/买卖处均维持，
+        // trigger 判定与 reconciliation 系统总额都读 total_balance
         statements.push(db.prepare(
-          `UPDATE portfolio SET ${layer}_layer_balance = ${layer}_layer_balance + ?, last_balance_update = ?, updated_at = ?
+          `UPDATE portfolio SET ${layer}_layer_balance = ${layer}_layer_balance + ?, total_balance = total_balance + ?, last_balance_update = ?, updated_at = ?
            WHERE user_id = ? AND ${duplicateGuard}`
-        ).bind(delta, now, now, userId, ...guardArgs));
+        ).bind(delta, delta, now, now, userId, ...guardArgs));
       }
     } else if (data.type === 'split' && positions.length > 0) {
       statements.push(db.prepare(

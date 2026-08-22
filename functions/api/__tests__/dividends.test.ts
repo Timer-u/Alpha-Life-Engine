@@ -63,15 +63,20 @@ describe('POST /api/dividends', () => {
     expect(updateIdx).toBeGreaterThanOrEqual(0);
     const updateSql = db.statements[updateIdx];
     expect(updateSql).toContain('safe_layer_balance = safe_layer_balance + ?');
+    // P0: cash dividends must credit total_balance too (total = safe + ambition
+    // invariant; trigger/reconciliation read total_balance)
+    expect(updateSql).toContain('total_balance = total_balance + ?');
     // guarded so a retry cannot re-credit
     expect(updateSql).toContain('(SELECT COUNT(*) FROM dividend_events WHERE user_id = ?');
     expect(updateSql).toContain('AND symbol = ? AND ex_date = ? AND type = ?) = 0');
 
-    // bound args: delta = round(1000 x 0.05 x 100) = 5000, then now/now/userId + guard args
+    // bound args: layer delta, total delta (both round(1000 x 0.05 x 100) = 5000),
+    // then now/now/userId + guard args
     const updateArgs = db.statementArgs[updateIdx];
     expect(updateArgs[0]).toBe(5000);
-    expect(updateArgs[3]).toBe(7);
-    expect(updateArgs.slice(4)).toEqual([7, '511360', '2026-08-10', 'cash']);
+    expect(updateArgs[1]).toBe(5000);
+    expect(updateArgs[4]).toBe(7);
+    expect(updateArgs.slice(5)).toEqual([7, '511360', '2026-08-10', 'cash']);
 
     const auditIdx = findStatement(db, 'INSERT INTO audit_logs');
     expect(auditIdx).toBeGreaterThanOrEqual(0);
