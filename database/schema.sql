@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS portfolio (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_user_id ON portfolio(user_id);
+
 -- Positions table for holding ETFs
 CREATE TABLE IF NOT EXISTS positions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,13 +132,6 @@ CREATE TABLE IF NOT EXISTS reconciliations (
 );
 
 -- System configuration
-CREATE TABLE IF NOT EXISTS config (
-  key TEXT PRIMARY KEY,
-  value TEXT,
-  description TEXT,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
 -- Sessions table for user sessions
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -201,16 +196,8 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Insert initial configuration values
-INSERT OR IGNORE INTO config (key, value, description) VALUES
-('trigger_line', '1667', '1667 yuan trigger line'),
-('commission_rate', '0.0003', '0.03% commission rate'),
-('commission_min', '5', 'Minimum commission in yuan'),
-('safe_layer_primary', '511360', 'Primary safe layer ETF symbol'),
-('safe_layer_backup', '511880', 'Backup safe layer ETF symbol'),
-('safe_layer_name_primary', '海富通短融ETF', 'Primary safe layer ETF name'),
-('safe_layer_name_backup', '银华日利', 'Backup safe layer ETF name'),
-('ambition_layer_name', '权益ETF', 'Ambition layer ETF name');
+-- config 表已删除（2026-08-22 审计）：播种后全代码无 FROM config 读取，
+-- 改表内触发线/佣金零效果，纯误导；真实事实源是 TRIGGER_CONSTANTS / ETF_CONSTANTS（src/types/api.ts）。
 
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);

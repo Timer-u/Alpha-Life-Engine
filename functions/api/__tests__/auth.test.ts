@@ -63,7 +63,7 @@ describe('POST /api/auth/otp/request', () => {
       const db = new FakeD1([
         { match: sql => sql.includes('FROM email_whitelist'), rows: [{ id: 1 }] },
         { match: sql => sql.includes('MAX(created_at)'), rows: [] },
-        { match: sql => sql.includes('COUNT(*)'), rows: [{ sent_hour: 0 }] },
+        // 条件 INSERT 内含 COUNT(*) 子查询，INSERT 规则必须排在 COUNT 规则之前
         {
           match: (sql, args) => {
             if (sql.includes('INSERT INTO otps')) {
@@ -72,8 +72,9 @@ describe('POST /api/auth/otp/request', () => {
             }
             return false;
           },
-          rows: [],
+          rows: [{ id: 1 }],
         },
+        { match: sql => sql.includes('COUNT(*)'), rows: [{ sent_hour: 0 }] },
       ]);
 
       const res = await requestOtp(db);
@@ -99,7 +100,6 @@ describe('POST /api/auth/otp/request', () => {
       const db = new FakeD1([
         { match: sql => sql.includes('FROM email_whitelist'), rows: [{ id: 1 }] },
         { match: sql => sql.includes('MAX(created_at)'), rows: () => (lastSent ? [{ last_sent: lastSent }] : []) },
-        { match: sql => sql.includes('COUNT(*)'), rows: [{ sent_hour: 0 }] },
         {
           match: (sql, args) => {
             if (sql.includes('INSERT INTO otps')) {
@@ -108,8 +108,9 @@ describe('POST /api/auth/otp/request', () => {
             }
             return false;
           },
-          rows: [],
+          rows: [{ id: 1 }],
         },
+        { match: sql => sql.includes('COUNT(*)'), rows: [{ sent_hour: 0 }] },
       ]);
 
       expect((await requestOtp(db)).status).toBe(200);
@@ -144,6 +145,7 @@ describe('POST /api/auth/otp/verify', () => {
   it('increments attempts on a wrong code and rejects the correct code after the cap', async () => {
     let attempts = 0;
     const db = new FakeD1([
+      { match: sql => sql.includes('FROM email_whitelist'), rows: [{ ok: 1 }] },
       { match: sql => sql.includes(OTPS_TABLE), rows: () => [futuristicRow(1, { attempts })] },
       {
         match: sql => {
@@ -173,6 +175,7 @@ describe('POST /api/auth/otp/verify', () => {
 
   it('rejects a verification when another request already consumed the code', async () => {
     const db = new FakeD1([
+      { match: sql => sql.includes('FROM email_whitelist'), rows: [{ ok: 1 }] },
       { match: sql => sql.includes(OTPS_TABLE), rows: [futuristicRow(1)] },
       { match: sql => sql.includes(CONSUME_OTP), rows: [], changes: 0 },
     ]);
@@ -191,10 +194,21 @@ describe('POST /api/auth/otp/verify', () => {
     });
     try {
       let sessionArgs: unknown[] | null = null;
+      let usersLookups = 0;
       const db = new FakeD1([
+        { match: sql => sql.includes('FROM email_whitelist'), rows: [{ ok: 1 }] },
         { match: sql => sql.includes(OTPS_TABLE), rows: [futuristicRow(1)] },
         { match: sql => sql.includes(CONSUME_OTP), rows: [], changes: 1 },
-        { match: sql => sql.includes('FROM users WHERE email'), rows: [] },
+        // 首次查询（存在性检查）无行；批次后的回查返回已建用户
+        {
+          match: sql => sql.includes('FROM users WHERE email'),
+          rows: () => {
+            usersLookups += 1;
+            return usersLookups === 1
+              ? []
+              : [{ id: 1, email: EMAIL, name: 'user', avatar_url: null, phone: null, preferences: null, created_at: '', updated_at: '' }];
+          },
+        },
         { match: sql => sql.includes('INSERT INTO users'), rows: [{ id: 1, email: EMAIL, name: 'user', created_at: '', updated_at: '' }] },
         { match: sql => sql.includes('INSERT INTO portfolio'), rows: [] },
         {
@@ -262,3 +276,56 @@ async function sha256Hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
   return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
 }
+
+describe('POST /api/auth/otp/verify — whitelist re-check & first-login heal', () => {
+  it('rejects a valid code when the email was removed from the whitelist after issuance', async () => {
+    const db = new FakeD1([
+      { match: sql => sql.includes('FROM email_whitelist'), rows: [] },
+      { match: sql => sql.includes(OTPS_TABLE), rows: [futuristicRow(1)] },
+    ]);
+    const res = await verifyOtp(db, '123456');
+    expect(res.status).toBe(403);
+    const json = (await res.json()) as { message?: string };
+    expect(json.message).toBe('邮箱未在白名单中');
+  });
+
+  it('heals an orphaned user (no portfolio) idempotently via INSERT ... SELECT ... NOT EXISTS', async () => {
+    // 历史缺陷：首登第二跳失败后 user 存在而 portfolio 缺失，
+    // else 分支的幂等补建必须真的发出 NOT EXISTS 守卫的 INSERT
+    let healSql: string | null = null;
+    let userInsertSeen = false;
+    const db = new FakeD1([
+      { match: sql => sql.includes('FROM email_whitelist'), rows: [{ ok: 1 }] },
+      { match: sql => sql.includes(OTPS_TABLE), rows: [futuristicRow(1)] },
+      { match: sql => sql.includes(CONSUME_OTP), rows: [], changes: 1 },
+      // heal INSERT 内含 "FROM users WHERE email" 子查询，必须排在 users 查询规则之前
+      {
+        match: sql => {
+          if (sql.includes('INSERT INTO portfolio')) {
+            healSql = sql;
+            return true;
+          }
+          return false;
+        },
+        rows: [],
+      },
+      { match: sql => sql.includes('FROM users WHERE email'), rows: [{ id: 3, email: EMAIL, name: 'user', avatar_url: null, phone: null, preferences: null, created_at: '', updated_at: '' }] },
+      {
+        match: sql => {
+          if (sql.includes('INSERT INTO users')) {
+            userInsertSeen = true;
+            return true;
+          }
+          return false;
+        },
+        rows: [],
+      },
+      { match: sql => sql.includes('INSERT INTO sessions'), rows: [] },
+    ]);
+    const res = await verifyOtp(db, '123456');
+    expect(res.status).toBe(200);
+    expect(healSql).not.toBeNull();
+    expect(healSql).toContain('WHERE NOT EXISTS (SELECT 1 FROM portfolio WHERE user_id =');
+    expect(userInsertSeen).toBe(false);
+  });
+});

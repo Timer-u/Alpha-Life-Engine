@@ -156,7 +156,11 @@ async function sendOtpEmail(email: string, code: string, apiKey: string): Promis
 // POST /api/auth/otp/request
 authRouter.post('/otp/request', async (c) => {
   try {
-    const { email } = otpRequestSchema.parse(await c.req.json());
+    const parsed = otpRequestSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json({ success: false, error: '验证失败', message: '邮箱格式不正确' }, 400);
+    }
+    const { email } = parsed.data;
     const db = c.env.DB;
 
     const whitelist = await db.prepare(
@@ -188,9 +192,19 @@ authRouter.post('/otp/request', async (c) => {
     }
 
     const code = generateOtp();
-    await db.prepare(
-      'INSERT INTO otps (email, code, used, attempts, created_at, expires_at) VALUES (?, ?, 0, 0, ?, ?)'
-    ).bind(email, code, nowIso(), addMinutes(10)).run();
+    // 条件 INSERT（冷却 + 时上限都在 INSERT 的 WHERE 内原子求值）：
+    // 上面两个 SELECT 只是友好报错的快路径；并发请求在此处串行裁决，
+    // 后到者 changes=0 → 429，不会双双穿过 60s 冷却多发邮件
+    const insert = await db.prepare(
+      `INSERT INTO otps (email, code, used, attempts, created_at, expires_at)
+       SELECT ?, ?, 0, 0, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM otps WHERE email = ? AND created_at > ?)
+         AND (SELECT COUNT(*) FROM otps WHERE email = ? AND created_at > ?) < ?
+       RETURNING id`
+    ).bind(email, code, nowIso(), addMinutes(10), email, cooldownFrom, email, hourFrom, OTP_REQUEST_HOURLY_CAP).first<{ id: number }>();
+    if (!insert) {
+      return c.json({ success: false, error: 'Too Many Requests', message: '发送过于频繁，请稍后再试' }, 429);
+    }
 
     await sendOtpEmail(email, code, c.env.RESEND_API_KEY);
 
@@ -203,9 +217,22 @@ authRouter.post('/otp/request', async (c) => {
 // POST /api/auth/otp/verify
 authRouter.post('/otp/verify', async (c) => {
   try {
-    const { email, otp } = otpVerifySchema.parse(await c.req.json());
+    const parsed = otpVerifySchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json({ success: false, error: '验证失败', message: '邮箱或验证码格式不正确' }, 400);
+    }
+    const { email, otp } = parsed.data;
     const db = c.env.DB;
     const now = nowIso();
+
+    // 已发出的验证码最多 10 分钟有效：白名单必须在 verify 入口复核，
+    // 否则移出白名单的邮箱在码过期前仍可登录
+    const whitelist = await db.prepare(
+      'SELECT 1 AS ok FROM email_whitelist WHERE email = ? LIMIT 1'
+    ).bind(email).first<{ ok: number }>();
+    if (!whitelist) {
+      return c.json({ success: false, error: 'Unauthorized', message: '邮箱未在白名单中' }, 403);
+    }
 
     // Attribute every attempt to the newest live code so the attempt cap is
     // enforceable. No-code, dead-code and wrong-code all answer identically.
@@ -238,16 +265,30 @@ authRouter.post('/otp/verify', async (c) => {
     let user: UserRow;
 
     if (!userResult.results.length) {
-      const insert = await db.prepare(
-        'INSERT INTO users (email, name, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING *'
-      ).bind(email, email.split('@')[0], now, now).all<UserRow>();
-      user = insert.results![0];
-
-      await db.prepare(
-        'INSERT INTO portfolio (user_id, total_balance, safe_layer_balance, ambition_layer_balance, created_at, updated_at) VALUES (?, 0, 0, 0, ?, ?)'
-      ).bind(user.id, now, now).run();
+      // 首登 user + portfolio 同一批次原子落库（此前两跳：user 已插入而
+      // portfolio 瞬时失败会留下永久孤儿 user，此后每次登录都走 else 分支
+      // 不再补建，POST /transactions 永远 400）。ON CONFLICT DO NOTHING 容忍
+      // 并发首登；portfolio 侧由 NOT EXISTS + 唯一索引幂等。
+      await db.batch([
+        db.prepare(
+          `INSERT INTO users (email, name, created_at, updated_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(email) DO NOTHING`
+        ).bind(email, email.split('@')[0], now, now),
+        db.prepare(
+          `INSERT INTO portfolio (user_id, total_balance, safe_layer_balance, ambition_layer_balance, created_at, updated_at)
+           SELECT id, 0, 0, 0, ?, ? FROM users WHERE email = ?
+           WHERE NOT EXISTS (SELECT 1 FROM portfolio WHERE user_id = (SELECT id FROM users WHERE email = ?))`
+        ).bind(now, now, email, email),
+      ]);
+      user = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first<UserRow>() as UserRow;
     } else {
       user = userResult.results[0];
+      // 幂等补建历史孤儿 user 的 portfolio（唯一索引保证不重复）
+      await db.prepare(
+        `INSERT INTO portfolio (user_id, total_balance, safe_layer_balance, ambition_layer_balance, created_at, updated_at)
+         SELECT id, 0, 0, 0, ?, ? FROM users WHERE email = ?
+         WHERE NOT EXISTS (SELECT 1 FROM portfolio WHERE user_id = (SELECT id FROM users WHERE email = ?))`
+      ).bind(now, now, email, email).run();
     }
 
     const sessionDays = parseInt(c.env.SESSION_DAYS || '7');
