@@ -22,18 +22,19 @@ function nowIso(): string {
 }
 
 async function fetchLatestPrices(db: D1Database): Promise<MarketPrices> {
+  // 单条 GROUP BY 拿全部标的最新非空收盘价，替代逐标的 N+1 串行查询
+  const placeholders = TRACKED_SYMBOLS.map(() => '?').join(',');
+  const rows = await db.prepare(
+    `SELECT m.symbol, m.close FROM market_data m
+     JOIN (SELECT symbol, MAX(date) AS max_date FROM market_data
+           WHERE symbol IN (${placeholders}) AND close IS NOT NULL GROUP BY symbol) latest
+     ON m.symbol = latest.symbol AND m.date = latest.max_date`
+  ).bind(...TRACKED_SYMBOLS).all<{ symbol: string; close: number | null }>();
+
   const prices: MarketPrices = {};
-
-  for (const symbol of TRACKED_SYMBOLS) {
-    const result = await db.prepare(
-      `SELECT close FROM market_data WHERE symbol = ? ORDER BY date DESC LIMIT 1`
-    ).bind(symbol).all<{ close: number | null }>();
-
-    if (result.results.length > 0 && result.results[0].close !== null) {
-      prices[symbol] = result.results[0].close;
-    }
+  for (const row of rows.results) {
+    if (row.close !== null) prices[row.symbol] = row.close;
   }
-
   return prices;
 }
 
@@ -49,7 +50,18 @@ triggerRouter.post('/', async (c) => {
   try {
     const userId = c.get('userId');
     const body = await c.req.json();
-    const parsed = triggerSchema.parse(body);
+    // safeParse + 400：.parse 抛出的 ZodError 会变 500 且把 zod 内部报文
+    // 泄露给客户端
+    const parsed = triggerSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({
+        success: false,
+        error: '验证失败',
+        message: 'signal_value 必须为非负数，signal_type 必须为 BSM/DOUBLE/NORMAL/SKIP',
+      }, 400);
+    }
+    const signalValue = parsed.data.signal_value;
+    const signalType = parsed.data.signal_type as SignalType;
 
     const portfolio = await c.env.DB.prepare('SELECT total_balance FROM portfolio WHERE user_id = ?').bind(userId).first<{ total_balance: number }>();
     if (!portfolio) return c.json({ success: false, error: 'Not Found', message: '未找到投资组合' }, 400);
@@ -57,8 +69,8 @@ triggerRouter.post('/', async (c) => {
     const input: TriggerInput = {
       user_id: userId,
       current_balance: portfolio.total_balance,
-      signal_value: parsed.signal_value,
-      signal_type: parsed.signal_type as SignalType,
+      signal_value: signalValue,
+      signal_type: signalType,
     };
 
     const validation = triggerEngine.validateTriggerInput(input);

@@ -72,11 +72,13 @@ export async function runScheduledMarketUpdate(env: Env, now: Date = new Date())
   const updatedSymbols: string[] = [];
   let insertedRows = 0;
   let firstSymbolError: unknown;
+  let fetchedSymbols = 0;
 
   for (const symbol of TRACKED_SYMBOLS) {
     try {
       const mark = marks.get(symbol) ?? '';
       const text = await fetchSinaHistory(symbol);
+      fetchedSymbols += 1;
       const rows = parseSinaHistory(text, symbol).filter(r => r.date > mark && r.date <= today);
       if (rows.length === 0) continue;
 
@@ -101,9 +103,15 @@ export async function runScheduledMarketUpdate(env: Env, now: Date = new Date())
     }
   }
 
-  if (updatedSymbols.length === 0) {
+  if (fetchedSymbols === 0) {
     if (firstSymbolError) throw firstSymbolError;
     throw new Error(`Sina returned no data for any tracked symbol on trading day ${today}`);
+  }
+  if (updatedSymbols.length === 0) {
+    if (firstSymbolError) throw firstSymbolError;
+    // 全部标的成功拉取且无校验错误，但都没有新行（手动补数后/数据源当日
+    // 延迟）：这是"已最新"，不是拉取失败，勿抛错制造每日假告警
+    return { skipped: true, reason: `all ${fetchedSymbols} symbols up to date on ${today}`, updatedSymbols: [], insertedRows: 0 };
   }
   const missing = findMissingSymbols(updatedSymbols, TRACKED_SYMBOLS);
   if (missing.length > 0) {

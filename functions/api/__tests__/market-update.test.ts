@@ -68,13 +68,14 @@ describe('runScheduledMarketUpdate', () => {
     }
   });
 
-  it('throws when Sina returns no data for any symbol on a trading day', async () => {
+  it('treats all-symbols-no-new-rows as up-to-date (skipped), not a failure', async () => {
+    // 2026-08-22 审计：把"无新数据"当失败会在手动补数后/新浪延迟时每天假错
     const db = marketDb();
     stubFetch(EMPTY_TEXT);
 
-    await expect(runScheduledMarketUpdate(testEnv(db), new Date('2026-08-19T04:00:00Z'))).rejects.toThrow(
-      'Sina returned no data for any tracked symbol on trading day 2026-08-19'
-    );
+    const result = await runScheduledMarketUpdate(testEnv(db), new Date('2026-08-19T04:00:00Z'));
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toContain('up to date');
     expect(db.statements).toEqual([]);
   });
 

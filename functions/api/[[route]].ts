@@ -49,7 +49,9 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>({
 app.use(
   '*',
   cors({
-    origin: ['http://localhost:3000', 'https://alpha-life.yourdomain.com'],
+    // 生产域名通过环境变量 CORS_ORIGIN 配置（逗号分隔）；
+    // 未配置时仅允许本地开发源，不再携带占位域名
+    origin: (process.env.CORS_ORIGIN ?? 'http://localhost:3000').split(',').map(o => o.trim()),
     credentials: true,
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'Cookie'],
@@ -105,6 +107,11 @@ export default {
     ctx.waitUntil(
       Promise.allSettled([
         runScheduledNotifications(env),
+        // sessions/otps 只增不清理：每日 cron 顺带删除已过期行
+        env.DB.batch([
+          env.DB.prepare('DELETE FROM sessions WHERE expires_at <= ?').bind(new Date().toISOString()),
+          env.DB.prepare('DELETE FROM otps WHERE expires_at <= ?').bind(new Date().toISOString()),
+        ]).catch(err => { console.error('[scheduled] session/otp cleanup failed:', err); }),
         runScheduledMarketUpdate(env).then(result => {
           if (result.skipped) {
             console.warn(`[scheduled] market update skipped: ${result.reason ?? ''}`)

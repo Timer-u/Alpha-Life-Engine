@@ -71,8 +71,8 @@ export async function computeLayerPerformance(db: D1Database, userId: number): P
   ambition: PerformancePoint[];
 }> {
   const txResult = await db.prepare(
-    `SELECT symbol, shares, price, amount AS amount_cents, commission AS commission_cents, transaction_type, layer, trade_date
-     FROM transactions WHERE user_id = ? ORDER BY trade_date ASC`
+    `SELECT id, symbol, shares, price, amount AS amount_cents, commission AS commission_cents, transaction_type, layer, trade_date
+     FROM transactions WHERE user_id = ? ORDER BY trade_date ASC, id ASC`
   ).bind(userId).all<TxRow>();
   const txs = txResult.results;
   if (txs.length === 0) return { safe: [], ambition: [] };
