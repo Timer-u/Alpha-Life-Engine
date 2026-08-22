@@ -12,6 +12,11 @@
  *
  * Data source: AKShare Sina (fund_etf_hist_sina). Per-symbol start dates come
  * from the D1 high-water mark; symbols without rows fall back to full history.
+ * NOTE: fund_etf_hist_sina does not support server-side date ranges — each
+ * "incremental" run downloads FULL history per symbol and filters locally
+ * (`df[df.date >= start]`). INSERT OR IGNORE keeps it idempotent; the runtime
+ * therefore equals a full refresh (~5-15 min for all symbols). Do not expect
+ * the high-water marks to shorten the download.
  * Unknown flags are rejected loudly (never silently ignored).
  */
 
@@ -103,12 +108,15 @@ function queryHighWaterMarks(dbName: string, env: Env): Record<string, string> {
     }
     return marks;
   } catch (error) {
-    console.warn(
-      `  WARN: could not read D1 high-water marks from ${dbName} (${env}); ` +
-        `falling back to full-history fetch for all symbols. ` +
-        `${error instanceof Error ? error.message : String(error)}`
+    // fail fast：降级为全量 refetch 需要 5-15 分钟，会撞上 CI 的
+    // 10 分钟超时（daily-market-update.yml），一次瞬时 wrangler 抖动
+    // 必然升级为 CI 失败 + gh issue。让本次运行直接失败、由 cron 下次重试。
+    throw new Error(
+      `Could not read D1 high-water marks from ${dbName} (${env}); aborting instead of ` +
+        `degrading to a full refetch (would exceed the CI timeout). ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
     );
-    return {};
   }
 }
 
@@ -315,7 +323,7 @@ export async function dailyMarketUpdate(): Promise<void> {
     console.log('='.repeat(50));
     console.log(`Daily market data update completed (${elapsed}s)`);
     console.log(`   Database: ${dbName} (${env})`);
-    console.log(`   Records inserted: ${insertCount}`);
+    console.log(`   Records (deduped rows): ${data.length} in ${insertCount} INSERT statements`);
     console.log('='.repeat(50));
   } catch (error) {
     console.error('');

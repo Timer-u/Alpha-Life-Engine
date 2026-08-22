@@ -4,6 +4,11 @@ import type { TrackedSymbol } from './symbols';
  * Generate the Python source that downloads daily bars from AKShare Sina
  * (`fund_etf_hist_sina`) for the given symbols and per-symbol start dates.
  *
+ * NOTE: fund_etf_hist_sina has NO server-side date-range parameter — the
+ * download is always the symbol's full history; `windows` only filters the
+ * returned rows locally (`df[df.date >= start]`). The per-symbol start dates
+ * reduce the SQL volume, not the download time.
+ *
  * Output CSV columns are pinned to `date,code,open,high,low,close,volume,amount`
  * with `code` in dotted form (e.g. `sh.511360`) — the TS consumers in
  * daily-market-update.ts and market-setup.ts parse by position and depend on
