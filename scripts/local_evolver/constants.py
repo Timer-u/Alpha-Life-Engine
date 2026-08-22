@@ -1,7 +1,15 @@
 """Domain constants for the Alpha-Life strategy evolver.
 
-All magic numbers with business meaning are centralized here.
-Import these constants instead of using raw literals in business logic.
+2026-08-22 清理：本文件曾经声称是"唯一事实源"，但其中绝大多数常量
+（参数默认值/搜索边界/各模块默认数）无任何引用，且与实际默认相互矛盾
+（如 SYNTHETIC_DEFAULT_PATHS=500 vs 实际 5000、REGIME lookback=6 vs
+实际 3 个月）。真正的单一事实源是：
+
+- 参数默认值与搜索边界 → models.StrategyParameterSet / StrategyParameterBounds
+- DCA / 交易成本默认 → models.DcaConfig / TransactionCostConfig（config.yaml 可覆盖）
+- 各流程参数默认 → EvolverConfig / 各函数签名默认值
+
+此处只保留真正被跨模块引用的常量。
 """
 
 from __future__ import annotations
@@ -9,97 +17,13 @@ from __future__ import annotations
 # ============================================================================
 # Trading Calendar & Time
 # ============================================================================
-TRADING_DAYS_PER_YEAR: int = 252  # A-share trading days per year
-TRADING_DAYS_PER_MONTH: int = 21  # Approximate trading days per month
-TRADING_DAYS_PER_WEEK: int = 5
 REBALANCE_FREQUENCY_DAYS: int = 21  # Monthly rebalance (~21 trading days)
 
 # ============================================================================
-# Strategy Default Parameters
-# ============================================================================
-DEFAULT_TRIGGER_LINE: int = 1667  # Default trigger line in yuan
-DEFAULT_SAFE_RATIO: float = 0.6  # Default safe asset allocation ratio
-DEFAULT_AMBITION_RATIO: float = 0.4  # Default ambition asset allocation ratio
-DEFAULT_BSM_THRESHOLD: float = 1.4  # Default BSM threshold
-DEFAULT_MA_SHORT_WINDOW: int = 20  # Default short MA window (days)
-DEFAULT_MA_LONG_WINDOW: int = 60  # Default long MA window (days)
-
-# ============================================================================
-# Parameter Search Bounds
-# ============================================================================
-TRIGGER_LINE_MIN: int = 1000
-TRIGGER_LINE_MAX: int = 3000
-SAFE_RATIO_MIN: float = 0.3
-SAFE_RATIO_MAX: float = 0.8
-AMBITION_RATIO_MIN: float = 0.2
-AMBITION_RATIO_MAX: float = 0.7
-BSM_THRESHOLD_MIN: float = 1.0
-BSM_THRESHOLD_MAX: float = 2.0
-MA_SHORT_WINDOW_MIN: int = 5
-MA_SHORT_WINDOW_MAX: int = 50
-MA_LONG_WINDOW_MIN: int = 20
-MA_LONG_WINDOW_MAX: int = 200
-
-# ============================================================================
-# Transaction Costs
-# ============================================================================
-ETF_COMMISSION_BPS: float = 3.0  # ETF commission in basis points (万三)
-ETF_MIN_COMMISSION_YUAN: float = 5.0  # Minimum commission per trade (yuan)
-MMF_COMMISSION_BPS: float = 0.0  # Money market fund: ~zero cost
-ETF_BPS_TO_RATIO: float = 10000.0  # Convert basis points to decimal
-
-# ============================================================================
-# Walk-Forward Optimization
-# ============================================================================
-WF_DEFAULT_NUM_WINDOWS: int = 6
-WF_DEFAULT_TRAIN_RATIO: float = 0.7
-WF_DEFAULT_NUM_PARAM_SETS: int = 200
-WF_MIN_OBSERVATIONS: int = 63  # Legacy alias, see MIN_OBS_FOR_SHARPE below
-
-# ============================================================================
-# DCA Simulator (定投模拟)
-# ============================================================================
-DEFAULT_MONTHLY_CONTRIBUTION: float = 1000.0  # 每月定投金额（元）
-DEFAULT_CONTRIBUTION_FREQ_DAYS: int = 21  # 定投间隔（交易日 ≈ 一个月）
-
-# ============================================================================
-# A-Share Trading Rules (P1)
-# ============================================================================
-ETF_PRICE_LIMIT: float = 0.10  # 涨停幅度（当日涨幅 >= 此值无法买入）
-ETF_SPREAD: float = 0.002  # ETF 折溢价近似（双边价差，买入价上浮一半）
-LOT_SIZE: int = 100  # ETF 整手（股）
-
-# ============================================================================
-# Monte Carlo Estimation Window
+# Monte Carlo
 # ============================================================================
 MC_DEFAULT_ESTIMATE_WINDOW_DAYS: int = 252  # 漂移/波动估计窗口（交易日）
-
-# ============================================================================
-# Reproducibility
-# ============================================================================
-DEFAULT_SEED: int = 42  # Deterministic default RNG seed for the whole pipeline
-
-# ============================================================================
-# Monte Carlo Simulation
-# ============================================================================
-MC_DEFAULT_DAYS: int = 252
-MC_DEFAULT_PATHS: int = 10000
-MC_MIN_PATHS_FOR_CVAR: int = 100
-
-# ============================================================================
-# Efficient Frontier
-# ============================================================================
-EF_DEFAULT_POINTS: int = 50
-EF_MIN_POINTS: int = 10
-
-# ============================================================================
-# CP-CV (Combinatorial Purged Cross-Validation)
-# ============================================================================
-CPCV_DEFAULT_GROUPS: int = 10
-CPCV_DEFAULT_TEST_SIZE: float = 0.2
-CPCV_DEFAULT_SPLITS: int = 10
-CPCV_DEFAULT_PURGE_DAYS: int = 5
-CPCV_DEFAULT_EMBARGO_DAYS: int = 5
+MC_MIN_PATHS_FOR_CVAR: int = 100  # CVaR 估计所需的最少路径数
 
 # ============================================================================
 # Risk-Free Rate
@@ -107,36 +31,9 @@ CPCV_DEFAULT_EMBARGO_DAYS: int = 5
 DEFAULT_RISK_FREE_RATE: float = 0.025  # 2.5% annual risk-free rate
 
 # ============================================================================
-# Stability & PBO
+# Reproducibility
 # ============================================================================
-STABILITY_NEIGHBORHOOD_RADIUS: float = 0.05
-STABILITY_GRADIENT_THRESHOLD: float = 0.1
-PBO_REJECTION_THRESHOLD: float = 0.5
-DSR_ALPHA: float = 0.05
-
-# ============================================================================
-# Regime Detection
-# ============================================================================
-REGIME_N_STATES: int = 3  # Bull / Sideways / Bear
-REGIME_DEFAULT_LOOKBACK_MONTHS: int = 6
-REGIME_HYSTERESIS_WINDOW: int = 21
-
-# ============================================================================
-# Bootstrap
-# ============================================================================
-BOOTSTRAP_DEFAULT_RESAMPLES: int = 1000
-BOOTSTRAP_DEFAULT_BLOCK_SIZE: int = 5
-
-# ============================================================================
-# Sobol Sensitivity
-# ============================================================================
-SOBOL_DEFAULT_N_SAMPLES: int = 2048
-
-# ============================================================================
-# Synthetic Scenario Generation
-# ============================================================================
-SYNTHETIC_DEFAULT_PATHS: int = 500
-SYNTHETIC_FAT_TAIL_DOF: float = 3.0  # t-distribution degrees of freedom
+DEFAULT_SEED: int = 42  # Deterministic default RNG seed for the whole pipeline
 
 # ============================================================================
 # Minimum Observations for Statistical Validity
@@ -150,9 +47,3 @@ MIN_OBS_FOR_SKEW: int = 63
 MIN_OBS_FOR_KURTOSIS: int = 63
 MIN_OBS_FOR_DRIFT: int = 63
 MIN_OBS_FOR_BOOTSTRAP: int = 63
-
-# ============================================================================
-# Numerical Constants
-# ============================================================================
-EPSILON: float = 1e-15  # Numerical zero
-EULER_MASCHERONI: float = 0.5772156649  # Euler-Mascheroni constant

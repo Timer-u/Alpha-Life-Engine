@@ -9,11 +9,17 @@ Signal mapping (a documented modeling choice — questions of fidelity are P1):
 
   Build an ambition composite price series from `ambition_allocation` weights.
   For trading day t the moving averages use ONLY data in ``[.., t-1]`` —
-  there is zero lookahead:
+  zero lookahead holds FOR THE MOVING AVERAGES:
 
     ma_short[t] = mean(composite[t - ma_short_window : t])
     ma_long[t]  = mean(composite[t - ma_long_window : t])
     panic_ratio[t] = ma_long[t] / composite[t]
+
+  KNOWN OPTIMISM (documented limitation): the simulator decides on day t's
+  close AND fills at day t's close (the price-limit gate also uses day t's
+  full-day change), whereas the production engine decides after the close
+  and executes at the NEXT session. Same-day fills are systematically
+  optimistic vs live execution.
 
   A long MA requires a FULL window: when fewer than ``ma_long_window`` prior
   bars exist the long MA is undefined, so the day is treated as neutral

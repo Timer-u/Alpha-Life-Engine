@@ -127,14 +127,18 @@ def compute_sobol_indices(
         boot_si = []
         boot_sti = []
         rng = np.random.default_rng(42)
+        # 所有块按同一行号重抽（A/B/AB_i 本就共享行结构），方差也从重抽
+        # 后的全设计估计——只重抽 f(A) 块会把 var_y_boot 当成 YA 样本方差
+        y_ab_blocks = Y_AB
         for _ in range(n_boot):
             idx = rng.choice(n, n, replace=True)
+            blocks = [YA[idx], YB[idx]] + [blk[idx] for blk in y_ab_blocks]
+            var_y_boot = np.var(np.concatenate(blocks), ddof=1)
+            if var_y_boot <= 1e-15:
+                continue
             YA_boot = YA[idx]
             y_ab_boot = y_ab[idx]
             YB_boot = YB[idx]
-            var_y_boot = np.var(Y[idx], ddof=1)
-            if var_y_boot <= 1e-15:
-                continue
             si_boot = (
                 2.0 * np.cov(YA_boot, y_ab_boot)[0, 1] / var_y_boot
                 if len(YA_boot) > 1

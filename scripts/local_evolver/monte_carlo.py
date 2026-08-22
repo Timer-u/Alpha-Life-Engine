@@ -1,10 +1,11 @@
 """GPU-accelerated Monte Carlo simulation (GBM paths)."""
 
 import math
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import torch
-from constants import MC_DEFAULT_ESTIMATE_WINDOW_DAYS
+from constants import MC_DEFAULT_ESTIMATE_WINDOW_DAYS, MC_MIN_PATHS_FOR_CVAR
 from models import (
     CVaRResult,
     DrawdownAnalytics,
@@ -21,6 +22,7 @@ from mpt import (
 from mpt import (
     compute_mean_returns as compute_mean_returns,
 )
+from walk_forward import extract_prices_for_symbols
 
 
 def _get_device() -> torch.device:
@@ -122,32 +124,45 @@ def generate_gbm_path(
 
 
 def compute_cvar(sorted_returns: torch.Tensor, n_paths: int, level: float) -> float:
-    """Conditional VaR / Expected Shortfall at given level."""
+    """Conditional VaR / Expected Shortfall at given level.
+
+    路径数不足以支撑该分位时返回最差单条路径（保守下界），而非 0.0
+    冒充"无尾部损失"；路径数低于 MC_MIN_PATHS_FOR_CVAR 直接报错。
+    """
+    if n_paths < MC_MIN_PATHS_FOR_CVAR:
+        msg = f"CVaR needs >= {MC_MIN_PATHS_FOR_CVAR} paths, got {n_paths}"
+        raise ValueError(msg)
     idx = int(n_paths * level)
     if idx < 1:
-        return 0.0
+        return float(sorted_returns[0].item())
     return float(sorted_returns[:idx].mean().item())
 
 
 def _vectorized_max_consecutive(dd_below: torch.Tensor) -> torch.Tensor:
-    """Vectorized max consecutive True values per row."""
+    """Vectorized max consecutive True values per row.
+
+    延续到序列终点的回撤段（熊市路径常以水下收尾）同样计入：为没有
+    终点的 run 补一个虚拟终点（右边界索引）。
+    """
+    t = dd_below.shape[1]
     padded = torch.nn.functional.pad(dd_below, (1, 0), value=0)
     diff = padded[:, 1:] - padded[:, :-1]
     starts = (diff == 1).int()
     ends = (diff == -1).int()
-    start_indices = torch.nonzero(starts)
-    end_indices = torch.nonzero(ends)
     lengths = torch.zeros(dd_below.shape[0], device=dd_below.device, dtype=torch.int)
     for i in range(dd_below.shape[0]):
-        row_starts = start_indices[start_indices[:, 0] == i, 1]
-        row_ends = end_indices[end_indices[:, 0] == i, 1]
-        if len(row_starts) > 0 and len(row_ends) > 0:
-            min_len = min(len(row_starts), len(row_ends))
-            seg_lengths = (row_ends[:min_len] - row_starts[:min_len]).int()
-            if len(seg_lengths) > 0:
-                lengths[i] = int(seg_lengths.max().item())
-        if dd_below[i].all():
-            lengths[i] = dd_below.shape[1]
+        row_starts = torch.nonzero(starts[i]).flatten()
+        row_ends = torch.nonzero(ends[i]).flatten()
+        if len(row_starts) == 0:
+            continue
+        if len(row_ends) < len(row_starts):
+            # 最后一个 run 延续到终点：补虚拟终点
+            row_ends = torch.cat([
+                row_ends,
+                torch.tensor([t], device=dd_below.device, dtype=row_ends.dtype),
+            ])
+        seg_lengths = row_ends[: len(row_starts)] - row_starts[: len(row_starts)]
+        lengths[i] = int(seg_lengths.max().item())
     return lengths
 
 
@@ -244,14 +259,14 @@ def compute_monte_carlo_summary(
     var95 = q(0.05)
     var99 = q(0.01)
 
-    dd_list = [compute_max_drawdown(portfolio_values[i]) for i in range(min(n, 1000))]
-    max_dd = float(np.percentile(dd_list, 5)) if dd_list else 0.0
+    # max_drawdown 口径唯一：与 drawdown_analytics 用同一 2000 路径子集的
+    # p5 分位（旧的 1000 路径子集产生同名不同值的两个字段都进报告）
+    dd_analytics = compute_drawdown_analytics(portfolio_values, n)
+    max_dd = dd_analytics.max_drawdown
 
     cvar_95 = compute_cvar(sorted_r, n, 0.05)
     cvar_99 = compute_cvar(sorted_r, n, 0.01)
     cvar_995 = compute_cvar(sorted_r, n, 0.005)
-
-    dd_analytics = compute_drawdown_analytics(portfolio_values, n)
 
     summary = MonteCarloSummary(
         mean_return=mean_return,
@@ -296,10 +311,10 @@ def run_monte_carlo(
 ) -> tuple[MonteCarloResult, CVaRResult, DrawdownAnalytics]:
     device = _get_device()
 
-    n_total = min(
-        (len(data.symbols[s].close) for s in symbols if s in data.symbols),
-        default=0,
-    )
+    # 估计窗口基于日期对齐后的主索引长度（均值/协方差已在对齐矩阵上计算，
+    # min(len(close)) 会在有停牌/缺日时错位窗口端点）
+    aligned = extract_prices_for_symbols(data, symbols)
+    n_total = len(aligned[0])
     start_idx = max(0, n_total - estimate_window_days)
     mean_returns = compute_mean_returns(
         data, symbols, device, start=start_idx, end=n_total - 1
@@ -346,11 +361,15 @@ def run_monte_carlo(
         prices_t.append(pv)
         returns_t.append(pr)
 
-    start_date = __import__("datetime").datetime.now()
-    dates = [
-        (start_date + __import__("datetime").timedelta(days=t)).strftime("%Y-%m-%d")
-        for t in range(num_time_steps)
-    ]
+    # 路径横轴按交易日近似（跳过周末），自然日会把 252 个交易日摊到
+    # 约 360 个日历日，产生周末漂移
+    cur = datetime.now(UTC).date()
+    dates = []
+    for _ in range(num_time_steps):
+        dates.append(cur.isoformat())
+        cur += timedelta(days=1)
+        while cur.weekday() >= 5:
+            cur += timedelta(days=1)
 
     result = MonteCarloResult(
         paths=GbmPathData(dates=dates, prices=prices_t, returns=returns_t),

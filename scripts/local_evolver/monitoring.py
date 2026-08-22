@@ -36,8 +36,16 @@ def compute_psi(
     Returns:
         PSI 值
     """
-    all_vals = np.concatenate([expected, actual])
-    bins = np.percentile(all_vals, np.linspace(0, 100, n_bins + 1))
+    # 分箱边界取自基准（expected）分布的分位数：并集分箱在 actual 整体
+    # 偏移时会把几乎全部质量挤进单侧端箱，PSI 失真
+    quantiles = np.percentile(expected, np.linspace(0, 100, n_bins + 1))
+    # 大量并列值时 percentile 会给出重复边界，np.histogram 要求单调递增；
+    # 退化到 <2 箱说明 expected 近乎常数，PSI 无定义，按 0 处理
+    edges = np.unique(quantiles)
+    if len(edges) < 3:
+        return 0.0
+    # 外侧边界放开到 ±inf：actual 落在 expected 历史范围之外的尾部必须计入
+    bins = np.concatenate([[-np.inf], edges[1:-1], [np.inf]])
 
     expected_counts, _ = np.histogram(expected, bins=bins)
     actual_counts, _ = np.histogram(actual, bins=bins)

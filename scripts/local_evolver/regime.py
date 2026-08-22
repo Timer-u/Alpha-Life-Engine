@@ -21,31 +21,47 @@ import numpy as np
 from models import MarketDataInput, RegimeResult
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
+from walk_forward import extract_prices_for_symbols
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+
+
+def _returns_rowwise(prices: np.ndarray) -> np.ndarray:
+    """逐日收益（第 0 日为 0），NaN 价格传播为 NaN。"""
+    rets = np.zeros(len(prices))
+    if len(prices) > 1:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rets[1:] = prices[1:] / prices[:-1] - 1.0
+    return rets
 
 
 def compute_equal_weighted_returns(
     data: MarketDataInput,
     symbols: list[str],
 ) -> np.ndarray:
-    """计算等权组合的每日收益率序列。"""
+    """等权组合的每日收益率序列（日期对齐，逐日按可交易标的权重再归一）。
+
+    旧的 min(len) 尾部截断会在停牌/缺日时静默错位各标的；这里复用
+    walk_forward 的日期对齐矩阵，每日均值只在当日有数据的标的间计算
+    （晚上市标的上市前不计入），全部标的缺数据的日子为 NaN（响亮）。
+    """
     valid = [s for s in symbols if s in data.symbols and data.symbols[s].close]
     if not valid:
         return np.array([])
-
-    n = min(len(data.symbols[s].close) for s in valid)
-    if n < 10:
+    try:
+        aligned = extract_prices_for_symbols(data, valid)
+    except ValueError:
         return np.array([])
 
-    prices = np.zeros((len(valid), n))
-    for i, sym in enumerate(valid):
-        prices[i] = np.array(data.symbols[sym].close[-n:], dtype=np.float64)
-
-    eq_weights = np.ones(len(valid)) / len(valid)
-    portfolio_price = eq_weights @ prices
-    returns = portfolio_price[1:] / portfolio_price[:-1] - 1.0
-    return returns
+    rets = np.column_stack([_returns_rowwise(p) for p in aligned])
+    finite = np.isfinite(rets)
+    counts = finite.sum(axis=1)
+    sums = np.where(finite, rets, 0.0).sum(axis=1)
+    mean_rets = np.full(rets.shape[0], np.nan)
+    has_data = counts > 0
+    mean_rets[has_data] = sums[has_data] / counts[has_data]
+    # 第 0 日是占位 0 收益，剔除
+    return mean_rets[1:]
 
 
 def extract_regime_features(
@@ -125,22 +141,64 @@ def _hysteresis_smooth(
 
 
 def _compute_asset_returns(data: MarketDataInput, symbols: list[str]) -> np.ndarray:
-    """计算各资产的日收益率矩阵 (T, n_assets)。"""
+    """各资产的日收益率矩阵 (T-1, n_assets)，列序与 symbols 一致。
+
+    日期对齐替代旧的 min(len) 尾部截断；缺失日的行保留 NaN，由调用方
+    在逐状态协方差估计时做 listwise 剔除（不能进 np.cov 毒化结果）。
+    """
     valid = [s for s in symbols if s in data.symbols and data.symbols[s].close]
     if not valid:
         return np.array([])
-    n = min(len(data.symbols[s].close) for s in valid)
-    if n < 10:
+    try:
+        aligned = extract_prices_for_symbols(data, valid)
+    except ValueError:
         return np.array([])
-    rets_list = []
+    by_symbol = dict(zip(valid, aligned, strict=True))
+    master_len = aligned[0].shape[0]
+    cols = []
     for s in symbols:
-        if s in data.symbols and data.symbols[s].close:
-            prices = np.array(data.symbols[s].close[-n:], dtype=np.float64)
-            rets = prices[1:] / prices[:-1] - 1.0
-            rets_list.append(rets)
-        else:
-            rets_list.append(np.zeros(n - 1))
-    return np.column_stack(rets_list)
+        prices = by_symbol.get(s)
+        cols.append(
+            _returns_rowwise(prices) if prices is not None else np.zeros(master_len)
+        )
+    rets = np.column_stack(cols)
+    return rets[1:]
+
+
+def _regime_statistics(
+    smoothed: np.ndarray,
+    full_rets: np.ndarray,
+    asset_rets_aligned: np.ndarray,
+    n_states: int,
+) -> tuple[list[float], list[float], list[list[list[float]]]]:
+    """逐状态的收益均值/波动与资产协方差（协方差按完整截面 listwise 剔除）。"""
+    regime_rets: list[float] = []
+    regime_vols: list[float] = []
+    regime_covs: list[list[list[float]]] = []
+    labels_align = asset_rets_aligned.shape[0] == len(smoothed)
+
+    for s in range(n_states):
+        mask = smoothed == s
+        if mask.sum() == 0:
+            regime_rets.append(0.0)
+            regime_vols.append(0.0)
+            regime_covs.append([])
+            continue
+        segment = full_rets[mask]
+        finite = segment[np.isfinite(segment)]
+        regime_rets.append(float(finite.mean()) if len(finite) else 0.0)
+        regime_vols.append(float(finite.std(ddof=1)) if len(finite) > 1 else 0.0)
+
+        cov_rows = []
+        if mask.sum() > 1 and labels_align:
+            subset = asset_rets_aligned[mask]
+            # listwise 剔除当日任一标的无数据的行，NaN 进 np.cov 会毒化整阵
+            subset = subset[np.all(np.isfinite(subset), axis=1)]
+            if subset.shape[0] > 1:
+                cov_rows = np.cov(subset, rowvar=False, ddof=1).tolist()
+        regime_covs.append(cov_rows)
+
+    return regime_rets, regime_vols, regime_covs
 
 
 def detect_regimes(
@@ -191,8 +249,10 @@ def detect_regimes(
     for s in range(n_states):
         mask = raw_labels == s
         if mask.sum() > 0:
-            feat_returns[s] = returns[-features.shape[0] :][mask].mean()
-            feat_vols[s] = returns[-features.shape[0] :][mask].std(ddof=1)
+            segment = returns[-features.shape[0] :][mask]
+            finite = segment[np.isfinite(segment)]
+            feat_returns[s] = finite.mean() if len(finite) else 0.0
+            feat_vols[s] = finite.std(ddof=1) if len(finite) > 1 else 0.0
 
     # 按 (均值收益率, -波动率) 排序，均值相同时波动率低的为 Bull
     regime_stats = [(feat_returns[s], -feat_vols[s], s) for s in range(n_states)]
@@ -207,10 +267,6 @@ def detect_regimes(
     returns_series = compute_equal_weighted_returns(data, symbols)
     full_rets = returns_series[-features.shape[0] :]
 
-    regime_rets = []
-    regime_vols = []
-    regime_covs = []
-
     # 计算各状态下的资产协方差矩阵
     asset_rets = _compute_asset_returns(data, symbols)
     asset_rets_aligned = (
@@ -219,28 +275,20 @@ def detect_regimes(
         else asset_rets
     )
 
-    for s in range(n_states):
-        mask = smoothed == s
-        if mask.sum() > 0:
-            regime_rets.append(float(full_rets[mask].mean()))
-            regime_vols.append(float(full_rets[mask].std(ddof=1)))
-            if mask.sum() > 1 and asset_rets_aligned.shape[0] == len(smoothed):
-                subset = asset_rets_aligned[mask]
-                cov_s = np.cov(subset, rowvar=False, ddof=1)
-                regime_covs.append(cov_s.tolist())
-            else:
-                regime_covs.append([])
-        else:
-            regime_rets.append(0.0)
-            regime_vols.append(0.0)
-            regime_covs.append([])
+    regime_rets, regime_vols, regime_covs = _regime_statistics(
+        smoothed, full_rets, asset_rets_aligned, n_states
+    )
 
     labels = ["Bull", "Sideways", "Bear"]
+
+    # 概率列必须与标签走同一个重排（order[new] = 旧分量），
+    # 否则三概率按 GMM 内部分量序输出、与 regime_label 错位
+    remapped_probs = probs[:, order]
 
     return RegimeResult(
         current_regime=int(smoothed[-1]),
         regime_label=labels[int(smoothed[-1])],
-        regime_probs=[float(p) for p in probs[-1]],
+        regime_probs=[float(p) for p in remapped_probs[-1]],
         regime_labels_series=[int(l) for l in smoothed],
         regime_covariances=regime_covs,
         regime_returns=regime_rets,
