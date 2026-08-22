@@ -111,6 +111,8 @@ export interface TransactionForm {
   trigger_signal?: string;
   layer: LayerType;
   notes?: string;
+  // 表单传入的内容稳定幂等键（同一笔内容的重试复用同 key，见 src/lib/idempotency.ts）
+  idempotency_key?: string;
 }
 
 export interface AllocationWeight {
@@ -137,7 +139,8 @@ export interface LCHAllocation {
   safe_ratio: number;
   ambition_ratio: number;
   source: 'lch';
-  age: number;
+  /** null = 用户未填生日（保守 60/40 兜底，不臆造年龄） */
+  age: number | null;
 }
 
 export type ActiveAllocation = EvolvedParams | LCHAllocation;
@@ -226,14 +229,14 @@ export interface DashboardData {
   };
   strategy_evolution: {
     last_evolution: string | null;
-    days_since_evolution: number;
+    /** null = 从未演化（替代旧的 999 哨兵魔法数） */
+    days_since_evolution: number | null;
     pbo_score: number | null;
     status_color: 'green' | 'yellow' | 'red';
   };
 }
 
 export interface AuthSession {
-  token: string;
   user: {
     id: number;
     email: string;

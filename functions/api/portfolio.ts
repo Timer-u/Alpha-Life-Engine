@@ -157,7 +157,8 @@ portfolioRouter.get('/', async (c) => {
       created_at: string;
     }>();
 
-    let daysSinceEvolution = 999;
+    // null = 从未演化（旧实现用 999 哨兵，前端靠魔法数猜语义）
+    let daysSinceEvolution: number | null = null;
     let pboScore: number | null = null;
     let statusColor: 'green' | 'yellow' | 'red' = 'red';
 
@@ -273,11 +274,25 @@ portfolioRouter.post('/deposit', async (c) => {
 
     const updated = results[updatePortfolioIndex]?.results[0] as { total_balance: number; safe_layer_balance: number; ambition_layer_balance: number } | undefined;
     if (!updated) {
-      const existing = await db.prepare('SELECT amount_cents FROM deposits WHERE user_id = ? AND idempotency_key = ?')
-        .bind(userId, idempotency_key).first<{ amount_cents: number }>();
+      const [existing, portfolioRow] = await Promise.all([
+        db.prepare('SELECT amount_cents FROM deposits WHERE user_id = ? AND idempotency_key = ?')
+          .bind(userId, idempotency_key).first<{ amount_cents: number }>(),
+        db.prepare('SELECT total_balance, safe_layer_balance, ambition_layer_balance FROM portfolio WHERE user_id = ?')
+          .bind(userId).first<{ total_balance: number; safe_layer_balance: number; ambition_layer_balance: number }>(),
+      ]);
+      // duplicate 路径同样返回完整 portfolio（类型声明三个必填数字，旧 {} 与类型不符）
       return c.json({
         success: true,
-        data: { duplicate: true, amount_cents, safe_added_cents: 0, ambition_added_cents: 0, safe_ratio: safeRatio, ambition_ratio: 1 - safeRatio, allocation_source: allocation?.source ?? 'lch', portfolio: {} },
+        data: {
+          duplicate: true,
+          amount_cents,
+          safe_added_cents: 0,
+          ambition_added_cents: 0,
+          safe_ratio: safeRatio,
+          ambition_ratio: 1 - safeRatio,
+          allocation_source: allocation?.source ?? 'lch',
+          portfolio: portfolioRow ?? { total_balance: 0, safe_layer_balance: 0, ambition_layer_balance: 0 },
+        },
         message: `该笔充值已入账（重复请求已忽略）${existing ? `：¥${centsToYuan(existing.amount_cents).toFixed(2)}` : ''}`,
         timestamp: now,
       });

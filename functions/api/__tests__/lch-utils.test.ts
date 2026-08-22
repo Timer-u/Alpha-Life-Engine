@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeAllocation, resolveActiveParams } from '../lch-utils';
+import { normalizeAllocation, normalizeSplit, resolveActiveParams } from '../lch-utils';
 
 import { asD1, FakeD1 } from './helpers/fake-d1';
 
@@ -25,14 +25,17 @@ function dbWithReport(safeRatio: number, daysAgo: number): FakeD1 {
 }
 
 describe('resolveActiveParams', () => {
-  it('clamps evolved safe_ratio above 1 down to 1', async () => {
+  it('normalizes an out-of-range evolved safe_ratio so safe + ambition = 1', async () => {
+    // 2.0/0.4 → clamp 到 1/0.4 后按和归一化 = 1/1.4（旧的独立 clamp 会得到 1 + 0.4 = 1.4）
     const { allocation } = await resolveActiveParams(asD1(dbWithReport(2.0, 7)), 1);
-    expect(allocation?.safe_ratio).toBe(1);
+    expect(allocation?.safe_ratio).toBeCloseTo(1 / 1.4, 10);
+    expect((allocation?.safe_ratio ?? 0) + (allocation?.ambition_ratio ?? 0)).toBeCloseTo(1, 10);
   });
 
-  it('clamps evolved safe_ratio below 0 up to 0', async () => {
+  it('normalizes a negative evolved safe_ratio to 0 with ambition = 1', async () => {
     const { allocation } = await resolveActiveParams(asD1(dbWithReport(-0.5, 7)), 1);
     expect(allocation?.safe_ratio).toBe(0);
+    expect(allocation?.ambition_ratio).toBe(1);
   });
 
   it('keeps evolved safe_ratio within [0,1] unchanged', async () => {
@@ -83,5 +86,32 @@ describe('normalizeAllocation', () => {
     expect(normalizeAllocation(undefined, fallback)).toEqual(fallback);
     expect(normalizeAllocation('garbage', fallback)).toEqual(fallback);
     expect(normalizeAllocation({ '511360': 'abc' }, fallback)).toEqual(fallback);
+  });
+});
+
+
+describe('normalizeSplit', () => {
+  it('normalizes anomalous 0.9/0.9 reports to 0.5/0.5 (sum must be 1)', () => {
+    const { safeRatio, ambitionRatio } = normalizeSplit(0.9, 0.9);
+    expect(safeRatio).toBe(0.5);
+    expect(ambitionRatio).toBe(0.5);
+  });
+
+  it('preserves an already-normalized split exactly', () => {
+    expect(normalizeSplit(0.6, 0.4)).toEqual({ safeRatio: 0.6, ambitionRatio: 0.4 });
+  });
+
+  it('falls back conservatively when both ratios are non-positive', () => {
+    expect(normalizeSplit(0, 0)).toEqual({ safeRatio: 0.6, ambitionRatio: 0.4 });
+  });
+});
+
+describe('no-birthday fallback', () => {
+  it('returns the conservative 60/40 split instead of fabricating a 20-year-old', async () => {
+    const db = new FakeD1([
+      { match: sql => sql.includes('FROM users'), rows: [{ preferences: null }] },
+    ]);
+    const { allocation } = await resolveActiveParams(asD1(db), 1);
+    expect(allocation).toEqual({ safe_ratio: 0.6, ambition_ratio: 0.4, source: 'lch', age: null });
   });
 });

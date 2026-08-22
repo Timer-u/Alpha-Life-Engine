@@ -3,15 +3,23 @@
 
 import { formatCents } from '../../src/lib/money';
 
-const FROM_ADDRESS = 'no-reply@alpha-life.yourdomain.com';
+// Resend 发信地址：未验证域名会发送失败，生产环境必须配置 RESEND_FROM_ADDRESS
+const DEFAULT_FROM_ADDRESS = 'no-reply@alpha-life.yourdomain.com';
 
 export type NotificationType = 'strategy_expiry' | 'execution_suggestion';
 
-export async function sendEmail(apiKey: string, to: string, subject: string, html: string): Promise<boolean> {
+// 与 market-update.ts 的 AbortController 相同口径：无超时的 fetch 挂起
+// 不是异常（try/catch 接不住），会占住整个 cron 调用直到 15 分钟上限
+const EMAIL_TIMEOUT_MS = 10_000;
+
+export async function sendEmail(apiKey: string, to: string, subject: string, html: string, fromAddress?: string): Promise<boolean> {
+  const from = fromAddress ?? DEFAULT_FROM_ADDRESS;
   if (!apiKey) {
     console.warn(`[DEV] Email -> ${to}: ${subject}`);
     return false;
   }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), EMAIL_TIMEOUT_MS);
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -19,12 +27,15 @@ export async function sendEmail(apiKey: string, to: string, subject: string, htm
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({ from: FROM_ADDRESS, to, subject, html }),
+      body: JSON.stringify({ from, to, subject, html }),
+      signal: controller.signal,
     });
     return res.ok;
   } catch (error) {
     console.error('Failed to send email:', error);
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -138,14 +138,14 @@ describe('splitDepositCents', () => {
 });
 
 describe('POST /api/portfolio/deposit', () => {
-  it('clamps an out-of-range evolved safe_ratio (2.0) before splitting', async () => {
+  it('normalizes an out-of-range evolved split (2.0/0.4) so the layers sum to 1', async () => {
     const db = new FakeD1([
       { match: sql => sql.includes('FROM sessions'), rows: [SESSION_ROW] },
       { match: sql => sql.includes('SELECT preferences FROM users'), rows: [PREFS_ROW] },
       {
         match: sql => sql.includes('FROM strategy_reports'),
         rows: [{
-          report_data: JSON.stringify({ recommended_params: { trigger_line: 1667, safe_ratio: 2.0 } }),
+          report_data: JSON.stringify({ recommended_params: { trigger_line: 1667, safe_ratio: 2.0, ambition_ratio: 0.4 } }),
           pbo_score: null,
           dsr_ranking: null,
           evolution_timestamp: new Date().toISOString(),
@@ -168,8 +168,10 @@ describe('POST /api/portfolio/deposit', () => {
     };
     expect(json.success).toBe(true);
     expect(json.data.duplicate).toBe(false);
-    expect(json.data.safe_added_cents).toBe(100000);
-    expect(json.data.ambition_added_cents).toBe(0);
+    // 2.0/0.4 → clamp 1.0/0.4 → 归一化 1/1.4 ≈ 0.7143（两层合计恒等于入金）
+    expect(json.data.safe_added_cents).toBe(71428);
+    expect(json.data.ambition_added_cents).toBe(28572);
+    expect(json.data.safe_added_cents + json.data.ambition_added_cents).toBe(100000);
   });
 
   it('dedupes a repeated deposit by idempotency key', async () => {

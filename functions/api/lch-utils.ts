@@ -21,6 +21,20 @@ export function clampRatio(n: number): number {
   return Math.min(Math.max(n, 0), 1);
 }
 
+/** 归一化 safe/ambition 比例使 sum = 1。
+ *
+ * 演化报告的两比例若只各自独立 clamp，异常报告 0.9/0.9 会让 EXECUTE 建议
+ * 的两层合计 = 1.8×执行金额；而 splitDepositCents 只用 safeRatio、进取层取
+ * 余数永远 sum=1——同组比例两条路径行为必须一致。
+ */
+export function normalizeSplit(safe: number, ambition: number, fallbackSafe = 0.6): { safeRatio: number; ambitionRatio: number } {
+  const s = clampRatio(safe);
+  const a = clampRatio(ambition);
+  const total = s + a;
+  if (total <= 0) return { safeRatio: fallbackSafe, ambitionRatio: 1 - fallbackSafe };
+  return { safeRatio: s / total, ambitionRatio: a / total };
+}
+
 const PBO_REJECT_THRESHOLD = 0.5;
 
 export function normalizeAllocation(raw: unknown, fallback: AllocationWeight[]): AllocationWeight[] {
@@ -55,8 +69,12 @@ function parseBirthPrefs(prefsJson: string | null): { birthYear: number | null; 
 }
 
 function lchFallback(birthYear: number | null, birthMonth: number, birthDay: number): ActiveAllocation | null {
-  const year = birthYear ?? new Date().getFullYear() - 20;
-  return calculateLCHAllocation(year, birthMonth, birthDay);
+  // 无生日时不臆造"20 岁"（LCH 公式会给出 80% 进取层的激进配置，
+  // 与演化缺参兜底 60% 互相矛盾）：退保守的 60/40
+  if (birthYear === null) {
+    return { safe_ratio: 0.6, ambition_ratio: 0.4, source: 'lch', age: null };
+  }
+  return calculateLCHAllocation(birthYear, birthMonth, birthDay);
 }
 
 export async function resolveActiveParams(db: D1Db, userId: number): Promise<ResolveActiveParamsResult> {
@@ -103,8 +121,10 @@ export async function resolveActiveParams(db: D1Db, userId: number): Promise<Res
   }
 
   const lch = birthYear ? calculateLCHAllocation(birthYear, birthMonth, birthDay) : null;
-  const safeRatio = clampRatio(typeof p.safe_ratio === 'number' ? p.safe_ratio : (lch?.safe_ratio ?? 0.6));
-  const ambitionRatio = clampRatio(typeof p.ambition_ratio === 'number' ? p.ambition_ratio : (lch?.ambition_ratio ?? 0.4));
+  const { safeRatio, ambitionRatio } = normalizeSplit(
+    typeof p.safe_ratio === 'number' ? p.safe_ratio : (lch?.safe_ratio ?? 0.6),
+    typeof p.ambition_ratio === 'number' ? p.ambition_ratio : (lch?.ambition_ratio ?? 0.4),
+  );
   const bsmThreshold = typeof p.bsm_threshold === 'number' ? p.bsm_threshold : 1.4;
   const maShort = typeof p.ma_short_window === 'number' ? p.ma_short_window : 20;
   const maLong = typeof p.ma_long_window === 'number' ? p.ma_long_window : 60;
