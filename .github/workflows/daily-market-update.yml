@@ -41,7 +41,8 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install akshare pandas
+          # 与 pyproject.toml 版本约束保持同源（-e 安装本地包定义）
+          pip install -e ".[dev]"
           python -c "import akshare, pandas"
 
       - name: Install Node dependencies
