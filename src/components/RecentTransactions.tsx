@@ -59,7 +59,7 @@ export default function RecentTransactions({ transactions }: Props) {
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ duration: shouldReduceMotion ? 0 : 0.24, delay: shouldReduceMotion ? 0 : Math.min(index, 8) * 0.04 }}
                 >
-                  <td className="py-2 px-3 text-gray-600">{new Date(tx.created_at).toLocaleDateString('zh-CN')}</td>
+                  <td className="py-2 px-3 text-gray-600">{(tx.trade_date ?? tx.created_at).slice(0, 10)}</td>
                   <td className="py-2 px-3">
                     <span className={'inline-flex px-2 py-0.5 rounded text-xs font-medium ' + typeClassName}>{tx.transaction_type === 'buy' ? '买入' : '卖出'}</span>
                   </td>
@@ -71,7 +71,7 @@ export default function RecentTransactions({ transactions }: Props) {
                   <td className="py-2 px-3 text-right text-gray-900">
                     {tx.realized_pnl === null || tx.realized_pnl === undefined
                       ? <span className="text-gray-400">—</span>
-                      : <span className={'font-medium ' + pnlClassName}>{formatCents(tx.realized_pnl)}</span>}
+                      : <span className={'font-medium ' + pnlClassName}>{formatCents(tx.realized_pnl, { sign: true })}</span>}
                   </td>
                   <td className="py-2 px-3">
                     <span className={'text-xs ' + layerClassName}>

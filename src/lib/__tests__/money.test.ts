@@ -20,7 +20,7 @@ describe('centsToYuan', () => {
 
 describe('formatCents', () => {
   it('formats cents as yuan with symbol', () => {
-    expect(formatCents(123456)).toBe('¥1234.56');
+    expect(formatCents(123456)).toBe('¥1,234.56');
     expect(formatCents(0)).toBe('¥0.00');
     expect(formatCents(150, { sign: true })).toBe('+¥1.50');
     expect(formatCents(-150, { sign: true })).toBe('-¥1.50');

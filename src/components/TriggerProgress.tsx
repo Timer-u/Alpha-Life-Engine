@@ -21,7 +21,7 @@ export default function TriggerProgress({ currentBalance, triggerLine, status }:
     >
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">{triggerLine / 100} 元触发线</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{formatCents(triggerLine)} 触发线</h2>
           <p className="text-sm text-gray-500 mt-1">{status === 'triggerable' ? '已达到触发条件' : '累计中...'}</p>
         </div>
         <p className="text-2xl font-bold text-gray-900">

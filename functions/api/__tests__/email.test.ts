@@ -41,8 +41,9 @@ describe('executionSuggestionEmailHtml', () => {
       nextSafeEtfName: '测试ETF',
       message: '触发条件已满足',
     });
-    expect(html).toContain('¥1667.00');
-    expect(html).toContain('¥1000.00');
+    // formatCents 全库千分位分组
+    expect(html).toContain('¥1,667.00');
+    expect(html).toContain('¥1,000.00');
     expect(html).toContain('¥667.00');
     expect(html).toContain('¥0.50');
   });
