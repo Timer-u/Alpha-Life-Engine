@@ -172,11 +172,6 @@ transactionRouter.post('/', async (c) => {
       auditGuard = `(SELECT ${layerCol} FROM portfolio WHERE user_id = ?) >= ?`;
       auditGuardBinds = [userId, totalCostCents];
 
-      const newShares = (position?.shares ?? 0) + data.shares;
-      const newAvgPrice = position
-        ? (position.shares * position.avg_price + (amountCents + commissionCents) / 100) / newShares
-        : ((amountCents + commissionCents) / 100) / data.shares;
-
       statements.push(db.prepare(
         `INSERT INTO audit_logs (user_id, action, entity, old_value, new_value, created_at)
          SELECT ?, 'transaction', 'transactions', NULL, ?, ?
@@ -188,11 +183,10 @@ transactionRouter.post('/', async (c) => {
         realized_pnl: realizedPnlCents, trade_date: tradeDate, idempotency_key: data.idempotency_key,
       }), now, ...auditGuardBinds, userId, data.idempotency_key));
 
-      // 锚点 INSERT 最先执行：它的余额守卫在批前求值（看到扣款前的余额），
-      // 幂等守卫在自身插入前求值（COUNT=0）。随后的持仓/资金变更用
-      // BATCH_TXN_GUARD 判别子（request_nonce = 本次请求的 UUID），只有本批次
-      // 刚写入的 txn 行才满足 —— 重试/并发重复时锚点被幂等守卫拦截，判别子为
-      // 0，整批无操作。
+      // 锚点 INSERT：余额守卫在批时求值，幂等守卫在自身插入前求值（COUNT=0）。
+      // 随后的持仓/资金变更用 BATCH_TXN_GUARD 判别子（request_nonce = 本次请求
+      // 的 UUID），只有本批次刚写入的 txn 行才满足 —— 重试/并发重复时锚点被
+      // 幂等守卫拦截，判别子为 0，整批无操作。
       txnInsertIndex = statements.length;
       statements.push(
         db.prepare(
@@ -206,38 +200,52 @@ transactionRouter.post('/', async (c) => {
           data.idempotency_key, requestNonce, userId, totalCostCents, userId, data.idempotency_key)
       );
 
-      if (position) {
-        statements.push(
-          db.prepare(
-            `UPDATE positions SET shares = ?, avg_price = ?, current_price = ?, market_value = ?, last_price_update = ?, updated_at = ?
-             WHERE id = ? AND (SELECT ${layerCol} FROM portfolio WHERE user_id = ?) >= ?
-               AND ${BATCH_TXN_GUARD}`
-          ).bind(newShares, newAvgPrice, data.price, yuanToCents(newShares * data.price), now, now, position.id, userId, totalCostCents, userId, data.idempotency_key, requestNonce)
-        );
-      } else {
-        statements.push(
-          db.prepare(
-            `INSERT INTO positions (user_id, symbol, name, shares, avg_price, current_price, market_value, last_price_update, layer, created_at, updated_at)
-             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-             WHERE (SELECT ${layerCol} FROM portfolio WHERE user_id = ?) >= ?
-               AND ${BATCH_TXN_GUARD}
-             RETURNING id`
-          ).bind(userId, data.symbol, symbolName(data.symbol), newShares, newAvgPrice, data.price,
-            yuanToCents(newShares * data.price), now, data.layer, now, now, userId, totalCostCents, userId, data.idempotency_key, requestNonce)
-        );
-      }
+      const notionalYuan = (amountCents + commissionCents) / 100;
+
+      // 持仓用相对增量写法（SQLite UPDATE 的 SET 表达式全部读到旧行值），
+      // 不同幂等键的并发交易串行提交时不会用批前快照覆写彼此的写入。
+      // WHERE 匹配自然键（user+symbol+layer）而非快照 id。
+      statements.push(
+        db.prepare(
+          `UPDATE positions SET
+             shares = shares + ?,
+             avg_price = (shares * avg_price + ?) / (shares + ?),
+             current_price = ?,
+             market_value = CAST(ROUND((shares + ?) * ? * 100) AS INTEGER),
+             last_price_update = ?, updated_at = ?
+           WHERE user_id = ? AND symbol = ? AND layer = ?
+             AND (SELECT ${layerCol} FROM portfolio WHERE user_id = ?) >= ?
+             AND ${BATCH_TXN_GUARD}`
+        ).bind(data.shares, notionalYuan, data.shares, data.price, data.shares, data.price,
+          now, now, userId, data.symbol, data.layer, userId, totalCostCents, userId, data.idempotency_key, requestNonce)
+      );
+      // 批前无持仓、或并发全仓卖出已 DELETE 持仓行时上面的 UPDATE 匹配
+      // 0 行（交易与扣款仍会落库），此处按自然键条件补建，避免持仓凭空
+      // 消失/重复建行。行存在时 NOT EXISTS 为假，整条无操作。
+      statements.push(
+        db.prepare(
+          `INSERT INTO positions (user_id, symbol, name, shares, avg_price, current_price, market_value, last_price_update, layer, created_at, updated_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+           WHERE NOT EXISTS (SELECT 1 FROM positions WHERE user_id = ? AND symbol = ? AND layer = ?)
+             AND (SELECT ${layerCol} FROM portfolio WHERE user_id = ?) >= ?
+             AND ${BATCH_TXN_GUARD}
+           RETURNING id`
+        ).bind(userId, data.symbol, symbolName(data.symbol), data.shares, notionalYuan / data.shares,
+          data.price, amountCents, now, data.layer, now, now, userId, data.symbol, data.layer,
+          userId, totalCostCents, userId, data.idempotency_key, requestNonce)
+      );
 
       safeDelta = data.layer === 'safe' ? -totalCostCents : 0;
       ambitionDelta = data.layer === 'ambition' ? -totalCostCents : 0;
 
+      // 相对增量：余额守卫保留在 WHERE（批时求值），并发下不会覆写他人扣款
       statements.push(
         db.prepare(
-          `UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ?
+          `UPDATE portfolio SET total_balance = total_balance + ?, safe_layer_balance = safe_layer_balance + ?, ambition_layer_balance = ambition_layer_balance + ?, last_balance_update = ?, updated_at = ?
            WHERE user_id = ? AND ${layerCol} >= ?
              AND ${BATCH_TXN_GUARD}`
-        ).bind(portfolio.total_balance + safeDelta + ambitionDelta,
-          portfolio.safe_layer_balance + safeDelta,
-          portfolio.ambition_layer_balance + ambitionDelta, now, now, userId, totalCostCents, userId, data.idempotency_key, requestNonce)
+        ).bind(safeDelta + ambitionDelta, safeDelta, ambitionDelta,
+          now, now, userId, totalCostCents, userId, data.idempotency_key, requestNonce)
       );
     } else {
       // 卖出金额需覆盖佣金，否则净回款为负会侵蚀层级资金池
@@ -298,12 +306,13 @@ transactionRouter.post('/', async (c) => {
           ).bind(position.id, position.id, data.shares, userId, data.idempotency_key, requestNonce)
         );
       } else {
+        // market_value 同样用旧行值相对计算，与 shares = shares - ? 保持一致
         statements.push(
           db.prepare(
-            `UPDATE positions SET shares = shares - ?, current_price = ?, market_value = ?, last_price_update = ?, updated_at = ?
+            `UPDATE positions SET shares = shares - ?, current_price = ?, market_value = CAST(ROUND((shares - ?) * ? * 100) AS INTEGER), last_price_update = ?, updated_at = ?
              WHERE id = ? AND shares >= ?
                AND ${BATCH_TXN_GUARD}`
-          ).bind(data.shares, data.price, yuanToCents(newShares * data.price), now, now, position.id, data.shares, userId, data.idempotency_key, requestNonce)
+          ).bind(data.shares, data.price, data.shares, data.price, now, now, position.id, data.shares, userId, data.idempotency_key, requestNonce)
         );
       }
 
@@ -311,31 +320,16 @@ transactionRouter.post('/', async (c) => {
       safeDelta = data.layer === 'safe' ? proceedsCents : 0;
       ambitionDelta = data.layer === 'ambition' ? proceedsCents : 0;
 
-      if (newShares <= SHARE_EPSILON) {
-        // 全仓卖出：持仓已在上一条语句被 DELETE（批内顺序执行，后见先写），
-        // 此处不能再引用 positions 的持仓量（子查询为 NULL 会使 UPDATE 永假）。
-        // 股数充足性已由锚点 INSERT 的批前守卫保证，BATCH_TXN_GUARD 足以防止
-        // 重试/并发重复时重复入账。
-        statements.push(
-          db.prepare(
-            `UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ?
-             WHERE user_id = ?
-               AND ${BATCH_TXN_GUARD}`
-          ).bind(portfolio.total_balance + safeDelta + ambitionDelta,
-            portfolio.safe_layer_balance + safeDelta,
-            portfolio.ambition_layer_balance + ambitionDelta, now, now, userId, userId, data.idempotency_key, requestNonce)
-        );
-      } else {
-        statements.push(
-          db.prepare(
-            `UPDATE portfolio SET total_balance = ?, safe_layer_balance = ?, ambition_layer_balance = ?, last_balance_update = ?, updated_at = ?
-             WHERE user_id = ? AND (SELECT shares FROM positions WHERE id = ?) >= ?
-               AND ${BATCH_TXN_GUARD}`
-          ).bind(portfolio.total_balance + safeDelta + ambitionDelta,
-            portfolio.safe_layer_balance + safeDelta,
-            portfolio.ambition_layer_balance + ambitionDelta, now, now, userId, position.id, data.shares, userId, data.idempotency_key, requestNonce)
-        );
-      }
+      // 全仓与部分卖出统一相对增量：股数充足性已由锚点 INSERT 的批前守卫
+      // 保证（否则 BATCH_TXN_GUARD 为 0 整批无操作），此处无需再引用 positions。
+      statements.push(
+        db.prepare(
+          `UPDATE portfolio SET total_balance = total_balance + ?, safe_layer_balance = safe_layer_balance + ?, ambition_layer_balance = ambition_layer_balance + ?, last_balance_update = ?, updated_at = ?
+           WHERE user_id = ?
+             AND ${BATCH_TXN_GUARD}`
+        ).bind(safeDelta + ambitionDelta, safeDelta, ambitionDelta,
+          now, now, userId, userId, data.idempotency_key, requestNonce)
+      );
     }
 
     const results = await db.batch<TransactionRow>(statements);
