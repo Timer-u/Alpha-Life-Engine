@@ -1,11 +1,13 @@
 import type { LayerType, TransactionType } from '../types/api';
 
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import { usePortfolio } from '../hooks/usePortfolio';
 import { useToast } from '../hooks/useToast';
+import { IdempotencyKeyHolder } from '../lib/idempotency';
 import { yuanToCents } from '../lib/money';
+import { TRIGGER_CONSTANTS } from '../types/api';
 
 import SellConfirmModal from './SellConfirmModal';
 
@@ -39,6 +41,7 @@ export default function TransactionForm({ onSuccess }: Props) {
   const { createTransaction, isCreating, calculateCommission } = usePortfolio();
   const { toast } = useToast();
   const shouldReduceMotion = useReducedMotion() ?? false;
+  const idempotencyRef = useRef(new IdempotencyKeyHolder());
   const [symbol, setSymbol] = useState('511360');
   const [shares, setShares] = useState('');
   const [price, setPrice] = useState('');
@@ -49,7 +52,9 @@ export default function TransactionForm({ onSuccess }: Props) {
   const [error, setError] = useState('');
   const [sellConfirmCode, setSellConfirmCode] = useState<string | null>(null);
 
-  const amount = parseFloat(shares) * parseFloat(price) || 0;
+  const parsedShares = parseFloat(shares);
+  const parsedPrice = parseFloat(price);
+  const amount = parsedShares * parsedPrice || 0;
   const submitClassName = 'w-full disabled:opacity-50 ' + (transactionType === 'sell' ? 'btn-danger' : 'btn-primary');
 
   const handleLayerChange = (next: LayerType) => {
@@ -57,27 +62,51 @@ export default function TransactionForm({ onSuccess }: Props) {
     setSymbol(LAYER_SYMBOLS[next][0].value);
   };
 
+  // 后端同款佣金公式（单一事实源 TRIGGER_CONSTANTS），避免前端展示与
+  // 实际收取口径漂移
+  const fallbackCommissionCents = Math.max(
+    Math.round(yuanToCents(amount) * TRIGGER_CONSTANTS.COMMISSION_RATE),
+    TRIGGER_CONSTANTS.COMMISSION_MIN_CENTS,
+  );
+
   const handleCalculateCommission = useCallback(async () => {
     if (amount > 0) {
       try {
         const result = await calculateCommission(amount);
         setCommission((result.commission_cents / 100).toFixed(2));
       } catch {
-        setCommission(Math.max(amount * 0.0003, 5).toFixed(2));
+        setCommission((fallbackCommissionCents / 100).toFixed(2));
       }
     }
-  }, [amount, calculateCommission]);
+  }, [amount, calculateCommission, fallbackCommissionCents]);
+
+  const validate = (): string | null => {
+    if (!(parsedShares > 0)) return '股数必须是大于 0 的数字';
+    if (!(parsedPrice > 0)) return '价格必须是大于 0 的数字';
+    return null;
+  };
 
   const doSubmit = async () => {
     setError('');
-    const formCommission = commission ? yuanToCents(parseFloat(commission)) : yuanToCents(Math.max(amount * 0.0003, 5));
+    const validationError = validate();
+    if (validationError) {
+      setError(validationError);
+      toast('error', validationError);
+      return;
+    }
+    const formCommission = commission ? yuanToCents(parseFloat(commission)) : fallbackCommissionCents;
 
     try {
+      const key = idempotencyRef.current.keyFor(
+        `${transactionType}:${layer}:${symbol}:${parsedShares}:${parsedPrice}:${formCommission}`,
+      );
       await createTransaction({
-        symbol, shares: parseFloat(shares), price: parseFloat(price),
+        symbol, shares: parsedShares, price: parsedPrice,
         commission: formCommission, transaction_type: transactionType, layer,
         notes: notes || undefined,
+        idempotency_key: key,
       });
+      idempotencyRef.current.rotate();
       setShares(''); setPrice(''); setCommission(''); setNotes(''); setError('');
       setSellConfirmCode(null);
       toast('success', transactionType === 'buy' ? '买入交易已记录' : '卖出交易已记录');

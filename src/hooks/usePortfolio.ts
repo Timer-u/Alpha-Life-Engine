@@ -36,12 +36,17 @@ async function fetchDashboard(): Promise<DashboardData> {
   return json.data;
 }
 
-async function createTransaction(form: TransactionForm): Promise<Transaction> {
+async function createTransaction(form: TransactionForm & { idempotency_key?: string }): Promise<Transaction> {
   const res = await fetch(`${API_BASE}/api/transactions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ ...form, idempotency_key: crypto.randomUUID() }),
+    body: JSON.stringify({
+      ...form,
+      // 调用方（表单）传入内容稳定的 key，重试才能命中后端幂等守卫；
+      // 兜底随机 key 仅用于无表单上下文的调用
+      idempotency_key: form.idempotency_key ?? crypto.randomUUID(),
+    }),
   });
   const json = (await res.json()) as unknown;
   if (!isApiResponse(json) || !json.success) {

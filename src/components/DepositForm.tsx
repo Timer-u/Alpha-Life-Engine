@@ -1,10 +1,11 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { useActiveAllocation } from '../hooks/useActiveAllocation';
 import { usePortfolio } from '../hooks/usePortfolio';
 import { useToast } from '../hooks/useToast';
-import { yuanToCents } from '../lib/money';
+import { IdempotencyKeyHolder } from '../lib/idempotency';
+import { splitDepositCents, yuanToCents } from '../lib/money';
 
 interface Props {
   lastEvolution: string | null;
@@ -20,19 +21,26 @@ export default function DepositForm({ lastEvolution, onSuccess }: Props) {
   const { activeAllocation } = useActiveAllocation(lastEvolution);
   const { toast } = useToast();
   const shouldReduceMotion = useReducedMotion() ?? false;
+  const idempotencyRef = useRef(new IdempotencyKeyHolder());
   const [amount, setAmount] = useState('');
 
   const parsedAmount = parseFloat(amount) || 0;
   const safeRatio = activeAllocation?.safe_ratio ?? 0.6;
-  const safePreview = parsedAmount * safeRatio;
-  const ambitionPreview = parsedAmount - safePreview;
+  // 预览与后端拆分同源（splitDepositCents 取整），不再出现 ±1 分的展示差
+  const previewCents = yuanToCents(parsedAmount);
+  const previewSplit = splitDepositCents(previewCents, safeRatio);
+  const safePreview = previewSplit.safeAddedCents / 100;
+  const ambitionPreview = previewSplit.ambitionAddedCents / 100;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (parsedAmount <= 0) return;
     try {
       const amountCents = yuanToCents(parsedAmount);
-      const result = await deposit({ amountCents, idempotencyKey: crypto.randomUUID() });
+      // 内容稳定幂等键：超时重试复用同 key 才能命中后端守卫
+      const key = idempotencyRef.current.keyFor(`deposit:${amountCents}`);
+      const result = await deposit({ amountCents, idempotencyKey: key });
+      idempotencyRef.current.rotate();
       setAmount('');
       if (result.duplicate) {
         toast('info', result.message);
