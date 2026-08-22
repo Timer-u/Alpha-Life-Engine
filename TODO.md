@@ -5,6 +5,8 @@
 > 验证基线：`npm run types/lint/build` 全绿，vitest 42 passed，pytest 122 passed，ruff/mypy --strict/bandit 全绿；本地与生产 D1 数据一致（6 ETF 共 16,226 行，最新 2026-08-13）。
 >
 > 2026-08-17 状态：P1 回测方法学 10 项全部完成（A股规则/T+1/整手/涨停/折溢价、MPT 逐折估计、WF purge/embargo、regime 死代码删除、bootstrap 修复、stability 联合扰动、MC 252日窗口+5%分位数、回测窗口延至 2013-04、执行次数饱和文档化、cpcv 除零守卫）。
+>
+> 2026-08-21 状态：**P2 数据管道与后端全部完成**（b0d4701..d02f56b，20 commits 合并回 main）。含外部评审修复波：request_nonce 批内判别子（迁移 005）、dividends 白名单、fetch 超时、全仓卖出回款修复（预存缺陷，node:sqlite 实证）。验证基线：types/lint/build 全绿，vitest 133 passed / 18 files。
 
 ## 已完成
 
@@ -98,18 +100,18 @@
 - [x] **执行次数受流动性上限饱和**：默认月供下 `bsm_threshold` 只改变执行时点而非次数——建模选择，需在报告中说明
 - [x] ⚡ **`cpcv.py:77` 除零 RuntimeWarning**（pytest 中可见）：补齐样本不足分支
 
-### P2 数据管道与后端
+### P2 数据管道与后端（2026-08-21 全部完成，d02f56b）
 
-- [ ] **scheduled cron 不含市场数据更新**：`[[route]].ts` 的 scheduled 只调 notifications → 行情需手动 `market:update`。把数据更新接入 scheduled
-- [ ] **`market:init` 名不符实**：`package.json:18` 只跑 `market:setup && database:migrate`，不导入 D1；README.md:117/205 声称"下载全量历史 + 导入"错误。改脚本链或改文案
-- [ ] **无交易日历**：当前按 Asia/Shanghai 工作日近似，法定节假日（春节等）误报失败；无缺失日检测
-- [ ] **无 OHLC 合法性校验**（close>0、high≥low、6 标的全返回）
-- [ ] ⚡ **删除残留指数 CSV**：`data/market_data/sh_000012.csv`、`sh_000013.csv`、`sh_000300.csv`、`sh_000905.csv`、`sh_000922.csv`（旧宇宙残留，不在当前清单；原 TODO 项里的 sh_510300/510500/515080 现已在新宇宙中，属正常文件）
-- [ ] **无分红/除权处理**：新浪源不复权（已接受并记录局限），positions 也不随除权调整 → 长期收益失真。加股息记录 + 复权
+- [x] **scheduled cron 不含市场数据更新**：scheduled handler 已接入 `runScheduledMarketUpdate`（逐标的隔离，单标的失败不再中断整批）
+- [x] **`market:init` 名不符实**：脚本链已改为全量下载 + 迁移 + 导入 D1（`market:init` / `market:init:prod`）
+- [x] **无交易日历**：新增 `src/lib/trading-calendar.ts` + `trade-calendar.json`（2013-04 起，含 2013 前下界守卫）
+- [x] **无 OHLC 合法性校验**：新增 `market-validation.ts`（close>0、high≥low、6 标的全返回）
+- [x] ⚡ **删除残留指数 CSV**：旧宇宙 5 个指数 CSV 已删
+- [x] **无分红/除权处理**：新增 `dividends.ts` + 迁移 003（标的白名单 + 幂等批）
 - [ ] **演化权重数组被丢弃**（多标的轮换）：`safe_allocation`/`ambition_allocation` 解析后从未用于选标的；`getNextSafeETF` 恒返回主 ETF（`trigger-engine.ts:32-34` stub）；`lch-utils.ts:94` 死回退仍指向已删除的 `000300`；`src/types/api.ts` `ETF_CONSTANTS` 缺 511990。一并落地轮换或删除死代码
-- [ ] **无分页**：交易列表只有 limit 无 offset、组合页硬编码 `LIMIT 10`、对账 `LIMIT 24`
-- [ ] **无审计日志表、无备份/导出端点、交易无幂等键**
-- [ ] ⚡ **`src/types/api.ts` `AuthSession` 仍声明 `token`**（已无人读取）→ 清理
+- [x] **无分页**：交易列表/组合/对账均加 offset 分页（limit 1..200 clamp）
+- [x] **无审计日志表、无备份/导出端点、交易无幂等键**：`audit_logs` 表 + 批次首语句；`/api/export` 导出端点；`idempotency_key`（004）+ `request_nonce`（005）批内判别子，重试/并发重复整批 no-op
+- [ ] ⚡ **`src/types/api.ts:236` `AuthSession` 仍声明 `token`**（已无人读取）→ 清理
 
 ### P2 测试与工程
 
