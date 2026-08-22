@@ -16,10 +16,45 @@ def test_generate_cpcv_folds_basic():
     folds = generate_cpcv_folds(
         total_obs=252, num_groups=10, num_test_groups=2, num_splits=5
     )
-    assert len(folds) <= 5
+    # 5 个不同测试组组合 → 5 折，不再静默塌缩
+    assert len(folds) == 5
     for fold in folds:
-        assert fold.train_end > fold.train_start
-        assert fold.test_end >= fold.test_start
+        assert fold.train_length() > 0
+        assert fold.test_length() >= 5
+
+
+def test_generate_cpcv_folds_no_collapse_seed42_regression():
+    """2026-08-22 审计回归：seed 42、total_obs=3295、10 组、2 测试组、10 splits
+    旧实现只存活 2 折且 test 全为 [2966, 3289]（min/max 折叠 + 越界夹取静默丢折）。"""
+    folds = generate_cpcv_folds(
+        total_obs=3295, num_groups=10, num_test_groups=2, num_splits=10
+    )
+    assert len(folds) == 10
+    # 测试窗互不相同（每折是不同组的并集）
+    test_windows = {tuple(f.test_segments) for f in folds}
+    assert len(test_windows) == 10
+    # 每折 test 总长 = 2 组
+    for fold in folds:
+        assert fold.test_length() == 2 * (3295 // 10)
+    # train 段不与任何 test 段重叠，且紧邻 test 的 train 段按 purge/embargo 裁剪
+    for fold in folds:
+        for tlo, thi in fold.test_segments:
+            for rlo, rhi in fold.train_segments:
+                assert rhi < tlo or rlo > thi
+
+
+def test_generate_cpcv_folds_disjoint_test_groups_stay_disjoint():
+    """非连续测试组（如组 0 和组 5）必须保留两段，不折叠成 min/max 大区间。"""
+    folds = generate_cpcv_folds(
+        total_obs=1000, num_groups=10, num_test_groups=2, num_splits=45
+    )
+    disjoint = [f for f in folds if len(f.test_segments) == 2]
+    assert disjoint, "expected at least one fold with non-adjacent test groups"
+    for fold in disjoint:
+        first_hi = fold.test_segments[0][1]
+        second_lo, _ = fold.test_segments[1]
+        assert first_hi + 1 < second_lo  # 中间的组属于 train（purge/embargo 裁剪后）
+        assert fold.train_length() > 0
 
 
 def test_generate_cpcv_folds_insufficient_data():
@@ -53,7 +88,7 @@ def test_compute_portfolio_returns_missing_symbol(sample_market_data):
 
 def test_apply_fold_to_returns():
     returns = np.random.normal(0.001, 0.02, 200)
-    fold = CpcvFold(train_start=0, train_end=99, test_start=105, test_end=150)
+    fold = CpcvFold(train_segments=[(0, 99)], test_segments=[(105, 150)])
     train, test = apply_fold_to_returns(returns, fold)
     assert len(train) == 100
     assert len(test) == 46
@@ -73,7 +108,7 @@ def test_compute_cpcv_result(sample_market_data, sample_params):
 
 def test_compute_cpcv_result_empty():
     empty_data = MarketDataInput(symbols={})
-    folds = [CpcvFold(train_start=0, train_end=10, test_start=15, test_end=20)]
+    folds = [CpcvFold(train_segments=[(0, 10)], test_segments=[(15, 20)])]
     result = compute_cpcv_result(empty_data, [], {}, folds)
     assert result.dsr == 0.0
 

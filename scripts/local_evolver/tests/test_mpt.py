@@ -143,8 +143,8 @@ def test_frontier_weights_do_not_use_test_data():
         }
     )
     folds = [
-        CpcvFold(train_start=0, train_end=199, test_start=200, test_end=399),
-        CpcvFold(train_start=0, train_end=99, test_start=100, test_end=349),
+        CpcvFold(train_segments=[(0, 199)], test_segments=[(200, 399)]),
+        CpcvFold(train_segments=[(0, 99)], test_segments=[(100, 349)]),
     ]
     ef = compute_efficient_frontier_with_cpcv(
         data, ["A", "B"], folds, EvolverConfig(frontier_points=10)
@@ -206,8 +206,8 @@ def test_per_fold_frontiers_follow_their_own_train_window():
 def test_cpcv_reports_latest_fold_frontier_and_oos_per_fold_sharpes():
     data = _a_b_regime_data()
     folds = [
-        CpcvFold(train_start=0, train_end=99, test_start=150, test_end=199),
-        CpcvFold(train_start=100, train_end=199, test_start=200, test_end=299),
+        CpcvFold(train_segments=[(0, 99)], test_segments=[(150, 199)]),
+        CpcvFold(train_segments=[(100, 199)], test_segments=[(200, 299)]),
     ]
     ef = compute_efficient_frontier_with_cpcv(
         data, ["A", "B"], folds, EvolverConfig(frontier_points=10)

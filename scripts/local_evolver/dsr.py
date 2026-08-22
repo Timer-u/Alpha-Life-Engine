@@ -249,13 +249,15 @@ def bootstrap_ci(
 
     sharpes = np.array([compute_sharpe_ratio(b, risk_free_rate) for b in boot])
     sortinos = np.array([compute_sortino_ratio(b, risk_free_rate) for b in boot])
+    # max_drawdown 必须在净值曲线（cumprod 复权）上算峰谷，不能直接在日收益
+    # 率序列上 accumulate——那量度的是"当日收益距历史最佳单日收益的距离"，
+    # 会把 0% 回撤的序列报成 −50% 量级的虚构回撤
+    navs = np.cumprod(1.0 + boot, axis=1)
+    peaks = np.maximum.accumulate(navs, axis=1)
     with np.errstate(divide="ignore", invalid="ignore"):
-        dd_ratios = [
-            (np.maximum.accumulate(b) - b) / np.maximum.accumulate(b) for b in boot
-        ]
-    maxdds = np.array([
-        float(np.min(np.where(np.isfinite(dd), dd, 0.0))) for dd in dd_ratios
-    ])
+        dd_ratios = (peaks - navs) / peaks  # 回撤深度，非负
+    # 保持负值口径（最深回撤取负号），与旧报告字段语义一致
+    maxdds = -dd_ratios.max(axis=1)
 
     def _ci(arr: np.ndarray, level: float) -> tuple[float, float]:
         lo = float(np.percentile(arr, (1 - level) / 2 * 100))

@@ -13,6 +13,8 @@ from models import (
     SharpePercentiles,
 )
 
+type Segments = tuple[tuple[int, int], ...]
+
 
 def _sample_combinations(
     n: int, k: int, max_samples: int, random_state: int = 42
@@ -31,6 +33,47 @@ def _sample_combinations(
     return sampled
 
 
+def _merge_test_segments(
+    sorted_groups: list[int], group_size: int
+) -> list[tuple[int, int]]:
+    """相邻测试组并入同一段，保留组间非连续性。"""
+    segments: list[tuple[int, int]] = []
+    run_start = sorted_groups[0]
+    prev = sorted_groups[0]
+    for g in sorted_groups[1:]:
+        if g == prev + 1:
+            prev = g
+            continue
+        segments.append((run_start * group_size, (prev + 1) * group_size - 1))
+        run_start = g
+        prev = g
+    segments.append((run_start * group_size, (prev + 1) * group_size - 1))
+    return segments
+
+
+def _purged_train_segments(
+    num_groups: int,
+    test_set: set[int],
+    group_size: int,
+    purge_days: int,
+    embargo_days: int,
+) -> list[tuple[int, int]]:
+    """train：非测试组的连续游程，紧邻测试组一侧裁掉 purge/embargo。"""
+    segments: list[tuple[int, int]] = []
+    for g in range(num_groups):
+        if g in test_set:
+            continue
+        seg_start = g * group_size
+        seg_end = (g + 1) * group_size - 1
+        if (g - 1) in test_set:
+            seg_start += embargo_days
+        if (g + 1) in test_set:
+            seg_end -= purge_days
+        if seg_start <= seg_end:
+            segments.append((seg_start, seg_end))
+    return segments
+
+
 def generate_cpcv_folds(
     total_obs: int,
     num_groups: int = 10,
@@ -39,6 +82,12 @@ def generate_cpcv_folds(
     purge_days: int = 5,
     embargo_days: int = 5,
 ) -> list[CpcvFold]:
+    """生成 CPCV 折叠。
+
+    test = 所选组的并集（保留非连续性，不折叠成 min/max 连续区间）；
+    train = 其余组在每个测试组两侧做 purge（测试组前的 train 尾部）
+    与 embargo（测试组后的 train 头部）。
+    """
     group_size = total_obs // num_groups
     if group_size < 1:
         msg = f"total_obs ({total_obs}) too small for {num_groups} groups"
@@ -48,26 +97,31 @@ def generate_cpcv_folds(
         num_groups, num_test_groups, num_splits, random_state=42
     )
     folds: list[CpcvFold] = []
+    seen: set[tuple[Segments, Segments]] = set()
 
     for test_group_indices in combs:
         test_set = set(test_group_indices)
-        train_indices = [i for i in range(num_groups) if i not in test_set]
-
-        train_end = (max(train_indices) + 1) * group_size - 1
-        test_start = min(test_group_indices) * group_size
-        test_end = (max(test_group_indices) + 1) * group_size - 1
-
-        purged_train_end = min(train_end, test_start - purge_days - 1)
-        embargoed_test_start = max(test_start, train_end + embargo_days + 1)
-
-        fold = CpcvFold(
-            train_start=0,
-            train_end=max(0, purged_train_end),
-            test_start=min(total_obs - 1, embargoed_test_start),
-            test_end=min(total_obs - 1, test_end),
+        test_segments = _merge_test_segments(sorted(test_set), group_size)
+        train_segments = _purged_train_segments(
+            num_groups, test_set, group_size, purge_days, embargo_days
         )
-        if fold.train_end > fold.train_start and fold.test_end - fold.test_start >= 5:
+
+        key = (tuple(train_segments), tuple(test_segments))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        fold = CpcvFold(train_segments=train_segments, test_segments=test_segments)
+        if fold.train_length() > 0 and fold.test_length() >= 5:
             folds.append(fold)
+
+    if not folds:
+        msg = (
+            f"CPCV folds collapsed to 0 for total_obs={total_obs}, "
+            f"num_groups={num_groups}, num_test_groups={num_test_groups}, "
+            f"purge={purge_days}, embargo={embargo_days}"
+        )
+        raise ValueError(msg)
 
     return folds
 
@@ -111,9 +165,13 @@ def apply_fold_to_returns(
     returns: np.ndarray,
     fold: CpcvFold,
 ) -> tuple[np.ndarray, np.ndarray]:
-    train = returns[fold.train_start : fold.train_end + 1]
-    test = returns[fold.test_start : fold.test_end + 1]
-    return train, test
+    """按段拼接 train/test 切片（test 为非连续组并集时顺序保留）。"""
+
+    def _concat(segments: list[tuple[int, int]]) -> np.ndarray:
+        parts = [returns[lo : hi + 1] for lo, hi in segments]
+        return np.concatenate(parts) if parts else np.array([])
+
+    return _concat(fold.train_segments), _concat(fold.test_segments)
 
 
 def generate_nested_cpcv_folds(

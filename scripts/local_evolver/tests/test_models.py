@@ -56,7 +56,7 @@ def test_default_evolver_config():
 
 
 def test_cpcv_fold():
-    fold = CpcvFold(train_start=0, train_end=99, test_start=105, test_end=150)
+    fold = CpcvFold(train_segments=[(0, 99)], test_segments=[(105, 150)])
     assert fold.train_end == 99
 
 

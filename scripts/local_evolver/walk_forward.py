@@ -33,8 +33,16 @@ from models import (
 
 # Backtest safe layer = real money-market ETFs（回测即实盘宇宙）; backtest
 # and live execution share the same symbol universe.
-BACKTEST_SAFE_SYMBOLS = ["511880", "511990", "511360"]
-AMBITION_SYMBOLS = ["510300", "510500", "515080"]
+# 清单源自 scripts/symbols.ts（npm run symbols:sync 生成），消除双事实源。
+try:
+    from generated_symbols import AMBITION_SYMBOLS as _AMBITION
+    from generated_symbols import SAFE_SYMBOLS as _SAFE
+except ImportError:  # pragma: no cover - 生成文件缺失时兜底
+    _SAFE = ["511360", "511880", "511990"]
+    _AMBITION = ["510300", "510500", "515080"]
+
+BACKTEST_SAFE_SYMBOLS = list(_SAFE)
+AMBITION_SYMBOLS = list(_AMBITION)
 BACKTEST_SYMBOLS = BACKTEST_SAFE_SYMBOLS + AMBITION_SYMBOLS
 
 INVALID_SCORE = float("-inf")
@@ -90,19 +98,10 @@ def check_data_sufficiency(
             raise ValueError(msg)
 
 
-def extract_prices_for_symbols(
+def _by_symbol_prices(
     data: MarketDataInput,
     symbols: list[str],
-) -> list[np.ndarray]:
-    """Explicit date-based alignment across trading dates.
-
-    The backtest universe (``BACKTEST_SYMBOLS``) is aligned by union-join
-    with per-layer availability (P1): late listings are padded with NaN
-    until their first bar, and composites renormalize across whatever is
-    available. Any other symbol set is aligned by inner-join (intersection
-    of trading dates). Both replace the silent ``min(len)`` tail-alignment
-    (C1): a suspension day cannot silently shift series against each other.
-    """
+) -> list[tuple[str, dict[str, float]]]:
     if not symbols:
         msg = "no symbols given"
         raise ValueError(msg)
@@ -124,31 +123,12 @@ def extract_prices_for_symbols(
             msg = f"symbol {s} has duplicate trading dates"
             raise ValueError(msg)
         by_symbol.append((s, price_by_date))
-
-    common_dates: set[str] | None = None
-    for _, price_by_date in by_symbol:
-        common_dates = (
-            set(price_by_date)
-            if common_dates is None
-            else common_dates & set(price_by_date)
-        )
-    if not common_dates:
-        msg = "no common trading dates across symbols " + ", ".join(symbols)
-        raise ValueError(msg)
-
-    if set(symbols) == set(BACKTEST_SYMBOLS):
-        return _union_join_aligned(symbols, by_symbol)
-    ordered = sorted(common_dates)
-    aligned: list[np.ndarray] = []
-    for _, price_by_date in by_symbol:
-        aligned.append(np.array([price_by_date[d] for d in ordered], dtype=np.float64))
-    return aligned
+    return by_symbol
 
 
-def _union_join_aligned(
-    symbols: list[str],
+def _union_master_dates(
     by_symbol: list[tuple[str, dict[str, float]]],
-) -> list[np.ndarray]:
+) -> list[str]:
     """Union-join over trading dates with per-layer availability (P1).
 
     Master index = union of every symbol's trading dates, truncated to the
@@ -180,16 +160,76 @@ def _union_join_aligned(
     if not master:
         msg = "no trading dates after both layers become available"
         raise ValueError(msg)
+    return master
 
-    aligned: list[np.ndarray] = []
+
+def _is_backtest_universe(symbols: list[str]) -> bool:
+    return set(symbols) == set(BACKTEST_SYMBOLS)
+
+
+def extract_prices_for_symbols(
+    data: MarketDataInput,
+    symbols: list[str],
+) -> list[np.ndarray]:
+    """Explicit date-based alignment across trading dates.
+
+    The backtest universe (``BACKTEST_SYMBOLS``) is aligned by union-join
+    with per-layer availability (P1): late listings are padded with NaN
+    until their first bar, and composites renormalize across whatever is
+    available. Any other symbol set is aligned by inner-join (intersection
+    of trading dates). Both replace the silent ``min(len)`` tail-alignment
+    (C1): a suspension day cannot silently shift series against each other.
+    """
+    by_symbol = _by_symbol_prices(data, symbols)
+    return _prices_on_master_dates(symbols, by_symbol)
+
+
+def extract_dates_for_symbols(
+    data: MarketDataInput,
+    symbols: list[str],
+) -> list[str]:
+    """主索引日期序列（与 extract_prices_for_symbols 完全同一对齐规则）。"""
+    by_symbol = _by_symbol_prices(data, symbols)
+    if _is_backtest_universe(symbols):
+        return _union_master_dates(by_symbol)
+    common: set[str] | None = None
     for _, price_by_date in by_symbol:
-        aligned.append(
-            np.array(
-                [price_by_date.get(d, float("nan")) for d in master],
-                dtype=np.float64,
+        common = set(price_by_date) if common is None else common & set(price_by_date)
+    if not common:
+        msg = "no common trading dates across symbols " + ", ".join(symbols)
+        raise ValueError(msg)
+    return sorted(common)
+
+
+def _prices_on_master_dates(
+    symbols: list[str],
+    by_symbol: list[tuple[str, dict[str, float]]],
+) -> list[np.ndarray]:
+    if _is_backtest_universe(symbols):
+        master = _union_master_dates(by_symbol)
+        aligned: list[np.ndarray] = []
+        for _, price_by_date in by_symbol:
+            aligned.append(
+                np.array(
+                    [price_by_date.get(d, float("nan")) for d in master],
+                    dtype=np.float64,
+                )
             )
+        return aligned
+
+    common: set[str] | None = None
+    for _, price_by_date in by_symbol:
+        common = set(price_by_date) if common is None else common & set(price_by_date)
+    if not common:
+        msg = "no common trading dates across symbols " + ", ".join(symbols)
+        raise ValueError(msg)
+    ordered = sorted(common)
+    inner_aligned: list[np.ndarray] = []
+    for _, price_by_date in by_symbol:
+        inner_aligned.append(
+            np.array([price_by_date[d] for d in ordered], dtype=np.float64)
         )
-    return aligned
+    return inner_aligned
 
 
 def _prices_to_day_returns(prices: np.ndarray) -> np.ndarray:
@@ -236,13 +276,12 @@ def _weighted_composite(
     return nav
 
 
-def generate_walk_forward_windows(
-    total_obs: int,
-    num_windows: int = 6,
-    train_ratio: float = 0.7,
-    purge_days: int = 0,
-    embargo_days: int = 0,
-) -> list[WalkForwardWindow]:
+def _validate_walk_forward_params(
+    num_windows: int,
+    train_ratio: float,
+    purge_days: int,
+    embargo_days: int,
+) -> None:
     if num_windows <= 0:
         msg = f"num_windows must be >= 1, got {num_windows}"
         raise ValueError(msg)
@@ -253,23 +292,21 @@ def generate_walk_forward_windows(
         msg = f"purge/embargo must be >= 0, got purge={purge_days}, embargo={embargo_days}"
         raise ValueError(msg)
 
-    gap_span = (purge_days + embargo_days) * (num_windows - 1)
-    windows_per_fold = (total_obs - gap_span) // num_windows
-    if windows_per_fold < 1:
-        msg = (
-            f"total_obs ({total_obs}) too small for {num_windows} windows "
-            f"with purge={purge_days} + embargo={embargo_days}"
-        )
-        raise ValueError(msg)
 
-    train_size = int(windows_per_fold * train_ratio)
+def _validate_walk_forward_sizes(
+    total_obs: int,
+    num_windows: int,
+    purge_days: int,
+    embargo_days: int,
+    train_size: int,
+    test_size: int,
+) -> None:
     if purge_days >= train_size:
         msg = (
             f"purge_days ({purge_days}) must be < train_size ({train_size}); "
             "the purged train window would be empty"
         )
         raise ValueError(msg)
-    test_size = windows_per_fold - train_size
     if test_size < MIN_OBS_FOR_SHARPE:
         msg = (
             f"total_obs ({total_obs}) yields {test_size}-day test windows; "
@@ -282,6 +319,31 @@ def generate_walk_forward_windows(
             f"({purge_days}+{embargo_days})"
         )
         raise ValueError(msg)
+
+
+def generate_walk_forward_windows(
+    total_obs: int,
+    num_windows: int = 6,
+    train_ratio: float = 0.7,
+    purge_days: int = 0,
+    embargo_days: int = 0,
+) -> list[WalkForwardWindow]:
+    _validate_walk_forward_params(num_windows, train_ratio, purge_days, embargo_days)
+
+    gap_span = (purge_days + embargo_days) * (num_windows - 1)
+    windows_per_fold = (total_obs - gap_span) // num_windows
+    if windows_per_fold < 1:
+        msg = (
+            f"total_obs ({total_obs}) too small for {num_windows} windows "
+            f"with purge={purge_days} + embargo={embargo_days}"
+        )
+        raise ValueError(msg)
+
+    train_size = int(windows_per_fold * train_ratio)
+    test_size = windows_per_fold - train_size
+    _validate_walk_forward_sizes(
+        total_obs, num_windows, purge_days, embargo_days, train_size, test_size
+    )
 
     windows: list[WalkForwardWindow] = []
     for w in range(num_windows):
@@ -300,6 +362,15 @@ def generate_walk_forward_windows(
                 test_end=test_end,
             )
         )
+    if not windows:
+        # num_windows=1 且 embargo>0 时唯一窗口会越界被 break 掉；
+        # 空窗口在下游表现为 pbo_score=1.0 + 推荐参数回落默认，必须 loud-fail
+        msg = (
+            f"walk-forward windows collapsed to 0 for total_obs={total_obs}, "
+            f"num_windows={num_windows}, train_ratio={train_ratio}, "
+            f"purge={purge_days}, embargo={embargo_days}"
+        )
+        raise ValueError(msg)
     return windows
 
 
@@ -635,10 +706,14 @@ def run_walk_forward(
 
     pbo_score, ranking_matrix = _compute_pbo(train_rank_matrix, test_rank_matrix)
 
+    # 跨窗一致性：OOS Sharpe 均值的下界（mean − std，置信下界式）。
+    # 旧实现 abs(Sharpe(test_sharpes)) 在各窗口完全一致（std=0）时得 0 分，
+    # "最稳定"反而是最低分
     test_sharpes = np.array([r.test_sharpe for r in results])
-    stability_score = (
-        float(abs(compute_sharpe_ratio(test_sharpes))) if len(test_sharpes) > 1 else 0.0
-    )
+    if len(test_sharpes) > 1 and np.all(np.isfinite(test_sharpes)):
+        stability_score = float(test_sharpes.mean() - test_sharpes.std(ddof=1))
+    else:
+        stability_score = 0.0
 
     return WalkForwardSummary(
         results=results,

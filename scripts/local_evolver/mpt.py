@@ -24,6 +24,7 @@ from models import (
     SharpeDistribution,
     SharpePercentiles,
 )
+from walk_forward import extract_prices_for_symbols
 
 DEFAULT_RISK_FREE_RATE = 0.025
 
@@ -32,38 +33,90 @@ def _get_device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def _aligned_returns_matrix(data: MarketDataInput, symbols: list[str]) -> np.ndarray:
+    """日期对齐的逐标的日收益矩阵 (T-1, n)，列序与 symbols 一致。
+
+    对齐规则与 walk_forward.extract_prices_for_symbols 相同（回测宇宙
+    union-join、其余 inner-join），替代旧的 min(len) 尾部截断——停牌/缺日
+    不再静默错位协方差。行 t 为主索引第 t+1 日的收益（len N-1 约定，与
+    cpcv.compute_returns_from_prices / apply_fold_to_returns 一致，折段
+    索引在同一日历上）；无数据的标的列为全 0；union-join 下晚上市标的
+    上市前为 NaN。
+    """
+    columns: list[np.ndarray] = []
+    valid = [s for s in symbols if s in data.symbols and data.symbols[s].close]
+    if not valid:
+        return np.zeros((0, len(symbols)))
+    try:
+        aligned = extract_prices_for_symbols(data, valid)
+    except ValueError:
+        return np.zeros((0, len(symbols)))
+    by_symbol = dict(zip(valid, aligned, strict=True))
+    master_len = aligned[0].shape[0] if aligned else 0
+    for sym in symbols:
+        prices = by_symbol.get(sym)
+        if prices is None:
+            columns.append(np.zeros(max(master_len - 1, 0)))
+            continue
+        rets = np.zeros(max(len(prices) - 1, 0))
+        if len(prices) > 1:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                rets[:] = prices[1:] / prices[:-1] - 1.0
+        columns.append(rets)
+    return np.column_stack(columns) if columns else np.zeros((0, len(symbols)))
+
+
+def _resolve_segments(
+    n: int,
+    start: int,
+    end: int | None,
+    segments: list[tuple[int, int]] | None,
+) -> list[tuple[int, int]]:
+    if segments is None:
+        # (start, end) 窗口：沿用旧的宽容截断（end 超界时夹到最后一根可用收益）
+        if end is None:
+            end = n - 1
+        if start < 0 or start > end:
+            msg = f"invalid window start={start}, end={end} for n={n}"
+            raise ValueError(msg)
+        return [(start, min(end, n - 1))]
+    # 显式段列表（CPCV 折）：索引由内部生成，越界即 bug，严格报错
+    for lo, hi in segments:
+        if lo < 0 or hi >= n or hi < lo:
+            msg = f"invalid segment ({lo}, {hi}) for n={n}"
+            raise ValueError(msg)
+    return segments
+
+
+def _select_complete_rows(
+    matrix: np.ndarray, segments: list[tuple[int, int]]
+) -> np.ndarray:
+    """按段选取并剔除含 NaN 的交易日（协方差/均值需同日完整截面）。"""
+    parts = [matrix[lo : hi + 1] for lo, hi in segments if lo < matrix.shape[0]]
+    block = np.concatenate(parts) if parts else np.zeros((0, matrix.shape[1]))
+    return block[np.all(np.isfinite(block), axis=1)]
+
+
 def compute_mean_returns(
     data: MarketDataInput,
     symbols: list[str],
     device: torch.device,
     start: int = 0,
     end: int | None = None,
+    segments: list[tuple[int, int]] | None = None,
 ) -> torch.Tensor:
-    n = min(
-        (len(data.symbols[s].close) for s in symbols if s in data.symbols),
-        default=0,
-    )
+    matrix = _aligned_returns_matrix(data, symbols)
+    n = matrix.shape[0]
     if n < 10:
         msg = "No valid data or too few observations"
         raise ValueError(msg)
-    if end is None:
-        end = n - 1
-    if start < 0 or end >= n or start > end:
-        msg = f"invalid window start={start}, end={end} for n={n}"
-        raise ValueError(msg)
+    resolved = _resolve_segments(n, start, end, segments)
 
-    means = []
-    for sym in symbols:
-        df = data.symbols.get(sym)
-        if df is None:
-            means.append(0.0)
-        else:
-            prices = np.array(df.close[-n:], dtype=np.float64)
-            rets = prices[1:] / prices[:-1] - 1.0
-            lo = start
-            hi = min(end + 1, len(rets))
-            seg = rets[lo:hi]
-            means.append(float(seg.mean()) if len(seg) > 0 else 0.0)
+    complete = _select_complete_rows(matrix, resolved)
+    if complete.shape[0] > 0:
+        means = complete.mean(axis=0)
+    else:
+        means = np.zeros(matrix.shape[1])
     return torch.tensor(means, device=device, dtype=torch.float32)
 
 
@@ -73,37 +126,29 @@ def compute_covariance_matrix(
     device: torch.device,
     start: int = 0,
     end: int | None = None,
+    segments: list[tuple[int, int]] | None = None,
 ) -> torch.Tensor:
-    n = min(
-        (len(data.symbols[s].close) for s in symbols if s in data.symbols),
-        default=0,
-    )
-    if n < 2:
-        return torch.zeros(len(symbols), len(symbols), device=device)
-    if end is None:
-        end = n - 1
-    if start < 0 or end >= n or start > end:
-        msg = f"invalid window start={start}, end={end} for n={n}"
+    matrix = _aligned_returns_matrix(data, symbols)
+    n = matrix.shape[0]
+    if n < 10:
+        msg = (
+            f"insufficient observations for covariance: {n} aligned return rows, "
+            "need >= 10"
+        )
         raise ValueError(msg)
+    resolved = _resolve_segments(n, start, end, segments)
 
-    returns_list = []
-    for sym in symbols:
-        df = data.symbols.get(sym)
-        if df is None:
-            returns_list.append(torch.zeros(n - 1, device=device, dtype=torch.float32))
-        else:
-            prices = np.array(df.close[-n:], dtype=np.float64)
-            rets = prices[1:] / prices[:-1] - 1.0
-            returns_list.append(
-                torch.from_numpy(rets).to(device=device, dtype=torch.float32)
-            )
-
-    R = torch.stack(returns_list)
-    lo = start
-    hi = min(end + 1, R.shape[1])
-    R = R[:, lo:hi]
-    if R.shape[1] < 2:
-        return torch.zeros(len(symbols), len(symbols), device=device)
+    complete = _select_complete_rows(matrix, resolved)
+    if complete.shape[0] < 2:
+        # 数据不足显式报错：返回零矩阵会一路算出 0 波动/0 Sharpe 的垃圾值
+        # （旧版仅 numpy RuntimeWarning "Degrees of freedom <= 0" 后照算）
+        msg = (
+            f"window {resolved} has only {complete.shape[0]} complete cross-section "
+            "rows for covariance; need >= 2"
+        )
+        raise ValueError(msg)
+    # complete: (T, n) 观测 × 标的；转成 (n, T) 后中心化求协方差
+    R = torch.from_numpy(complete).to(device=device, dtype=torch.float32).T
     mean_centered = R - R.mean(dim=1, keepdim=True)
     cov = (mean_centered @ mean_centered.T) / (R.shape[1] - 1)
     return cov
@@ -268,6 +313,7 @@ def compute_efficient_frontier_on_window(
     risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
     start: int = 0,
     end: int | None = None,
+    segments: list[tuple[int, int]] | None = None,
 ) -> EfficientFrontier:
     if config is None:
         from models import DEFAULT_EVOLVER_CONFIG
@@ -275,8 +321,12 @@ def compute_efficient_frontier_on_window(
         config = DEFAULT_EVOLVER_CONFIG
 
     device = _get_device()
-    mean_returns = compute_mean_returns(data, symbols, device, start, end)
-    cov_matrix = compute_covariance_matrix(data, symbols, device, start, end)
+    mean_returns = compute_mean_returns(
+        data, symbols, device, start, end, segments=segments
+    )
+    cov_matrix = compute_covariance_matrix(
+        data, symbols, device, start, end, segments=segments
+    )
     return _frontier_from_moments(
         mean_returns,
         cov_matrix,
@@ -338,11 +388,12 @@ def compute_efficient_frontier_with_cpcv(
 ) -> EfficientFrontier:
     """Per-fold CPCV frontiers with out-of-sample evaluation.
 
-    Each fold re-estimates its own frontier on that fold's TRAIN window only
-    (inclusive convention ``returns[train_start : train_end + 1]``), so a
-    fold's test window never leaks into its own weights. The max-sharpe
-    weights are then evaluated on the SAME fold's test window — out of sample
-    by construction. The per-fold OOS return series are concatenated into the
+    Each fold re-estimates its own frontier on that fold's TRAIN segments only
+    (the union of purged/embargoed train groups — non-contiguous in CPCV, so
+    test-group data can never leak into the moment estimates), so a fold's
+    test window never leaks into its own weights. The max-sharpe weights are
+    then evaluated on the SAME fold's test window — out of sample by
+    construction. The per-fold OOS return series are concatenated into the
     reported DSR/Sharpe distribution.
 
     The REPORTED frontier is the latest fold's (max test_end) estimation —
@@ -371,8 +422,7 @@ def compute_efficient_frontier_with_cpcv(
             symbols,
             config,
             risk_free_rate,
-            start=fold.train_start,
-            end=fold.train_end,
+            segments=fold.train_segments,
         )
         if not ef.max_sharpe_portfolio:
             continue
@@ -384,7 +434,9 @@ def compute_efficient_frontier_with_cpcv(
         _, test_returns = apply_fold_to_returns(all_returns, fold)
         if len(test_returns) < 2:
             continue
-        fold_sharpes.append(compute_sharpe_ratio(test_returns, risk_free_rate))
+        # risk_free_rate 是年化利率；逐日收益均值须减日频 rf（同 evaluate_portfolio
+        # 的 rf/252 口径），否则日均值 2bp/波 40bp 的组合 Sharpe 被压到 −6 量级
+        fold_sharpes.append(compute_sharpe_ratio(test_returns, risk_free_rate / 252.0))
         oos_parts.append(test_returns)
 
     if report_ef is None:
@@ -393,8 +445,7 @@ def compute_efficient_frontier_with_cpcv(
             symbols,
             config,
             risk_free_rate,
-            start=report_fold.train_start,
-            end=report_fold.train_end,
+            segments=report_fold.train_segments,
         )
     if report_ef.max_sharpe_portfolio is None:
         return report_ef

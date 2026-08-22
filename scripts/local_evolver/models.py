@@ -20,10 +20,38 @@ class MarketDataInput:
 
 @dataclass
 class CpcvFold:
-    train_start: int
-    train_end: int
-    test_start: int
-    test_end: int
+    """CPCV 折叠：train/test 均为 (start, end) 闭区间段列表。
+
+    CPCV 的 test 是所选组的并集（可非连续）；train 为其余组在每个测试
+    组两侧做 purge/embargo 后可能被切成多段。旧的单一连续区间表示会把
+    非连续测试组折叠成 min/max 区间并在越界夹取后静默丢折。
+    """
+
+    train_segments: list[tuple[int, int]] = field(default_factory=list)
+    test_segments: list[tuple[int, int]] = field(default_factory=list)
+
+    @property
+    def train_start(self) -> int:
+        """首段起点（连续区间兼容视图）。"""
+        return self.train_segments[0][0] if self.train_segments else 0
+
+    @property
+    def train_end(self) -> int:
+        return self.train_segments[-1][1] if self.train_segments else -1
+
+    @property
+    def test_start(self) -> int:
+        return self.test_segments[0][0] if self.test_segments else 0
+
+    @property
+    def test_end(self) -> int:
+        return self.test_segments[-1][1] if self.test_segments else -1
+
+    def train_length(self) -> int:
+        return sum(hi - lo + 1 for lo, hi in self.train_segments)
+
+    def test_length(self) -> int:
+        return sum(hi - lo + 1 for lo, hi in self.test_segments)
 
 
 @dataclass
