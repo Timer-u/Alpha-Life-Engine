@@ -134,6 +134,10 @@ ignore = [
 # ========================
 # 主代码（演化器核心）
 # ========================
+"scripts/local_evolver/generated_symbols.py" = [
+    "ALL",           # 生成文件（npm run symbols:sync），不接受人工编辑也无需 lint
+]
+
 "scripts/local_evolver/*.py" = [
     "ANN",            # 类型标注 — 核心代码逐步添加，采取渐进式策略
     "D",              # 文档字符串 — 中文注释优先，格式自由
