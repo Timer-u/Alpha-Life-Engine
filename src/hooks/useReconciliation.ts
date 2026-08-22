@@ -2,9 +2,8 @@ import type { Reconciliation, ReconciliationComparison } from '../types/api';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { apiFetch, retryExceptUnauthorized } from '../lib/api';
 import { isApiResponse } from '../types/api';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
 // All money fields below (broker_balance / deposits / withdrawals / gains / fees)
 // are integer CENTS. The Reconciliation page converts yuan inputs before calling create.
@@ -32,6 +31,8 @@ export interface CalibrateResult {
   };
   holdings_value: number;
   system_total: number;
+  /** 校准核对提示（差额去向、持仓构成仍需人工核对等），UI 必须展示 */
+  warnings: string[];
   message: string;
 }
 
@@ -42,8 +43,7 @@ function extractMessage(json: unknown, fallback: string): string {
 }
 
 async function fetchReconciliations(): Promise<Reconciliation[]> {
-  const res = await fetch(`${API_BASE}/api/reconciliation`, { credentials: 'include' });
-  const json = (await res.json()) as unknown;
+  const json = (await apiFetch('/api/reconciliation')) as unknown;
   if (!isApiResponse(json) || !json.success || !Array.isArray(json.data)) {
     throw new Error(extractMessage(json, '获取对账记录失败'));
   }
@@ -51,13 +51,11 @@ async function fetchReconciliations(): Promise<Reconciliation[]> {
 }
 
 async function createReconciliation(input: CreateReconciliationInput): Promise<CreateReconciliationResult> {
-  const res = await fetch(`${API_BASE}/api/reconciliation`, {
+  const json = (await apiFetch('/api/reconciliation', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
     body: JSON.stringify(input),
-  });
-  const json = (await res.json()) as unknown;
+  })) as unknown;
   if (!isApiResponse(json) || !json.success) {
     throw new Error(extractMessage(json, '对账失败'));
   }
@@ -69,19 +67,21 @@ async function createReconciliation(input: CreateReconciliationInput): Promise<C
 }
 
 async function calibrateReconciliation(id: number): Promise<CalibrateResult> {
-  const res = await fetch(`${API_BASE}/api/reconciliation/${id}/calibrate`, {
+  const json = (await apiFetch(`/api/reconciliation/${id}/calibrate`, {
     method: 'POST',
-    credentials: 'include',
-  });
-  const json = (await res.json()) as unknown;
+  })) as unknown;
   if (!isApiResponse(json) || !json.success) {
     throw new Error(extractMessage(json, '校准失败'));
   }
-  const data = json.data as Omit<CalibrateResult, 'message'> | undefined;
+  const data = json.data as (Omit<CalibrateResult, 'message' | 'warnings'> & { warnings?: unknown }) | undefined;
   if (!data || typeof data.system_total !== 'number') {
     throw new Error('Invalid calibrate data');
   }
-  return { ...data, message: extractMessage(json, '校准完成') };
+  return {
+    ...data,
+    warnings: Array.isArray(data.warnings) ? data.warnings.filter((w): w is string => typeof w === 'string') : [],
+    message: extractMessage(json, '校准完成'),
+  };
 }
 
 export function useReconciliation() {
@@ -90,6 +90,7 @@ export function useReconciliation() {
   const listQuery = useQuery({
     queryKey: ['reconciliation', 'list'],
     queryFn: fetchReconciliations,
+    retry: retryExceptUnauthorized,
   });
 
   const invalidate = async () => {

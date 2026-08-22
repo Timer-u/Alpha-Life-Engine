@@ -8,10 +8,10 @@ import { Link } from 'react-router';
 import { useAuth } from '../hooks/useAuth';
 import { useReconciliation } from '../hooks/useReconciliation';
 import { useToast } from '../hooks/useToast';
-import { formatCents, yuanToCents } from '../lib/money';
+import { formatCents, shanghaiYearMonth, yuanToCents } from '../lib/money';
 
 function currentMonth(): string {
-  return new Date().toISOString().slice(0, 7);
+  return shanghaiYearMonth();
 }
 
 const STATUS_BADGES: Record<ReconciliationStatus, { className: string; label: string }> = {
@@ -66,15 +66,28 @@ export default function Reconciliation() {
     }
   };
 
-  const handleCalibrate = async (id: number) => {
+  const handleCalibrate = async (rec: ReconciliationRecord) => {
+    // 明示将使用的余额与月份：旧月份的券商总资产改写的是"当前"资金池
+    const confirmed = window.confirm(
+      `将按 ${rec.reconciliation_date} 记录的券商总资产 ${formatCents(rec.ending_balance)} 校准当前资金池现金` +
+      `（目标现金 = 该券商总资产 − 当前持仓市值）。确定继续？`,
+    );
+    if (!confirmed) return;
     try {
-      const res = await calibrate(id);
+      const res = await calibrate(rec.id);
       toast('success', res.message);
+      for (const warning of res.warnings) {
+        toast('info', warning);
+      }
       setResult(null);
     } catch (err) {
       toast('error', (err as Error).message);
     }
   };
+
+  // 仅最新一条 PENDING 可校准（后端同样强制）：更早的待校准记录的券商
+  // 余额属于它自己的月份，不能用来改写当前资金池
+  const latestPendingId = reconciliations.find(rec => rec.status === 'PENDING')?.id ?? null;
 
   const pageMotion = {
     initial: { opacity: 0, y: shouldReduceMotion ? 0 : 10 },
@@ -97,7 +110,7 @@ export default function Reconciliation() {
             </div>
             <div className="flex items-center gap-4">
               <Link to="/" className="text-sm text-primary-600 hover:text-primary-700">返回仪表盘</Link>
-              <motion.button onClick={() => logout()} className="text-sm text-gray-500 hover:text-gray-700" whileHover={shouldReduceMotion ? undefined : { y: -1 }} whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}>退出登录</motion.button>
+              <motion.button onClick={() => { logout().catch(() => toast('error', '退出登录失败，请重试')); }} className="text-sm text-gray-500 hover:text-gray-700" whileHover={shouldReduceMotion ? undefined : { y: -1 }} whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}>退出登录</motion.button>
             </div>
           </div>
         </div>
@@ -161,7 +174,7 @@ export default function Reconciliation() {
                   </div>
                 </div>
                 {result.comparison.needs_calibration && (
-                  <motion.button onClick={() => handleCalibrate(result.reconciliation.id)} disabled={isCalibrating} className="btn-primary mt-4 disabled:opacity-50" whileHover={shouldReduceMotion ? undefined : { y: -1 }} whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}>
+                  <motion.button onClick={() => handleCalibrate(result.reconciliation)} disabled={isCalibrating} className="btn-primary mt-4 disabled:opacity-50" whileHover={shouldReduceMotion ? undefined : { y: -1 }} whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}>
                     {isCalibrating ? '校准中...' : '一键校准（以券商数据为准）'}
                   </motion.button>
                 )}
@@ -206,8 +219,11 @@ export default function Reconciliation() {
                           <td className="py-2 px-3 text-right font-mono text-gray-500">{variancePctLabel(rec)}</td>
                           <td className="py-2 px-3"><span className={'inline-flex px-2 py-0.5 rounded text-xs font-medium ' + statusClassName}>{STATUS_BADGES[rec.status].label}</span></td>
                           <td className="py-2 px-3 text-right">
-                            {needsCalibration(rec) && (
-                              <motion.button onClick={() => handleCalibrate(rec.id)} disabled={isCalibrating} className="text-xs text-primary-600 hover:text-primary-700 font-medium disabled:opacity-50" whileHover={shouldReduceMotion ? undefined : { y: -1 }} whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}>校准</motion.button>
+                            {needsCalibration(rec) && rec.id === latestPendingId && (
+                              <motion.button onClick={() => handleCalibrate(rec)} disabled={isCalibrating} className="text-xs text-primary-600 hover:text-primary-700 font-medium disabled:opacity-50" whileHover={shouldReduceMotion ? undefined : { y: -1 }} whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}>校准</motion.button>
+                            )}
+                            {needsCalibration(rec) && rec.id !== latestPendingId && (
+                              <span className="text-xs text-gray-400">已过期</span>
                             )}
                           </td>
                         </motion.tr>

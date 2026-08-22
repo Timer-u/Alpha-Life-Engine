@@ -226,6 +226,21 @@ reconciliationRouter.post('/:id/calibrate', async (c) => {
       return c.json({ success: false, error: 'Invalid state', message: '该对账记录已确认，无需校准' }, 400);
     }
 
+    // 仅最新一条 PENDING 可校准：旧记录的 ending_balance（券商总资产）属于
+    // 它自己的月份，用它改写"当前"资金池（= 旧券商总资产 − 当前持仓市值）
+    // 会静默引入过期基准
+    const latestPending = await db.prepare(
+      `SELECT id FROM reconciliations WHERE user_id = ? AND status = 'PENDING'
+       ORDER BY reconciliation_date DESC, id DESC LIMIT 1`
+    ).bind(userId).first<{ id: number }>();
+    if (latestPending?.id !== rec.id) {
+      return c.json({
+        success: false,
+        error: 'Stale record',
+        message: '仅最新一条待校准记录可执行一键校准；旧月份记录的券商余额不适用于当前资金池，请对当月重新发起对账',
+      }, 409);
+    }
+
     const { cash, holdingsValue } = await computeSystemState(db, userId);
     const targetCash = Math.max(rec.ending_balance - holdingsValue, 0);
 
